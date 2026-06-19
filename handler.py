@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import requests
 import runpod
 
-from master_pack import build_master_pack
+print("StemForge worker booting", flush=True)
 
 
 def download_file(url: str, destination: Path) -> None:
@@ -28,11 +28,18 @@ def upload_file_put(url: str, file_path: Path) -> None:
 
 
 def handler(job: dict) -> dict:
+    print("StemForge received job", flush=True)
     payload = job.get("input") or {}
+
+    if payload.get("healthcheck") is True:
+        return {"ok": True, "status": "ready", "service": "stemforge-worker"}
 
     audio_url = payload.get("audio_url")
     if not audio_url:
         return {"ok": False, "error": "Missing required input.audio_url"}
+
+    # Lazy import so empty health checks do not load the full audio pipeline.
+    from master_pack import build_master_pack
 
     filename = payload.get("filename")
     if not filename:
@@ -63,11 +70,12 @@ def handler(job: dict) -> dict:
                 output_root=output_root,
             )
 
-            archive_size = result["archive_path"] and Path(result["archive_path"]).stat().st_size
+            archive_path = Path(result["archive_path"])
+            archive_size = archive_path.stat().st_size
 
             uploaded = False
             if result_put_url:
-                upload_file_put(result_put_url, Path(result["archive_path"]))
+                upload_file_put(result_put_url, archive_path)
                 uploaded = True
 
             return {
@@ -86,4 +94,5 @@ def handler(job: dict) -> dict:
         }
 
 
+print("StemForge handler ready", flush=True)
 runpod.serverless.start({"handler": handler})
