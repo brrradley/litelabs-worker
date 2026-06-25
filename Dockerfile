@@ -20,6 +20,7 @@ RUN python -m pip install --upgrade pip setuptools wheel && \
     python -m pip install -r /app/requirements.txt
 
 COPY master_pack.py /app/master_pack.py
+COPY research_tools.py /app/research_tools.py
 COPY handler.py /app/handler.py
 
 CMD ["python", "-u", "/app/handler.py"]
