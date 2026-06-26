@@ -17,6 +17,11 @@ def safe_track_name(filename: str) -> str:
     return stem or "track"
 
 
+def safe_output_format(value: str | None) -> str:
+    value = (value or "flac").lower().strip()
+    return value if value in {"mp3", "flac"} else "flac"
+
+
 def run(cmd: list[str | Path]) -> None:
     print("\nRUN:", " ".join(str(x) for x in cmd), flush=True)
     subprocess.run([str(x) for x in cmd], check=True)
@@ -33,14 +38,28 @@ def require_file(path: Path, label: str) -> None:
         raise FileNotFoundError(f"Missing {label}: {path}")
 
 
-def ffmpeg_to_flac(src: Path, dest: Path) -> None:
-    run(["ffmpeg", "-y", "-i", src, "-c:a", "flac", dest])
+def convert_audio(src: Path, dest: Path, output_format: str) -> None:
+    output_format = safe_output_format(output_format)
+    if output_format == "mp3":
+        run(["ffmpeg", "-y", "-i", src, "-codec:a", "libmp3lame", "-q:a", "2", dest])
+    else:
+        run(["ffmpeg", "-y", "-i", src, "-c:a", "flac", dest])
 
 
-def write_litelabs_readme(path: Path, track: str) -> None:
+def copy_or_convert_audio(src: Path, dest: Path, output_format: str) -> None:
+    output_format = safe_output_format(output_format)
+    if output_format == "flac" and src.suffix.lower() == ".flac":
+        shutil.copy2(src, dest)
+    else:
+        convert_audio(src, dest, output_format)
+
+
+def write_litelabs_readme(path: Path, track: str, output_format: str) -> None:
+    ext = safe_output_format(output_format).upper()
     path.write_text(
         f"LiteLABS by LiteRECORDS\n\n"
-        f"Track: {track}\n\n"
+        f"Track: {track}\n"
+        f"Output format: {ext}\n\n"
         "Created by LiteRECORDS\n"
         "https://literecords.com\n\n"
         "This stem pack was generated using LiteLABS, an experimental music tool created by "
@@ -80,11 +99,20 @@ def make_zip_archive(source_dir: Path, archive: Path, archive_root: str, progres
     notify(progress, "ZIP stem pack ready", 92)
 
 
-def build_master_pack(input_audio: Path, work_root: Path, model_dir: Path, output_root: Path, progress: ProgressCallback | None = None) -> dict:
+def build_master_pack(
+    input_audio: Path,
+    work_root: Path,
+    model_dir: Path,
+    output_root: Path,
+    progress: ProgressCallback | None = None,
+    output_format: str = "flac",
+) -> dict:
     input_audio = input_audio.resolve()
     work_root = work_root.resolve()
     model_dir = model_dir.resolve()
     output_root = output_root.resolve()
+    output_format = safe_output_format(output_format)
+    ext = output_format
 
     notify(progress, "Checking worker files", 18)
     require_file(input_audio, "input audio")
@@ -97,7 +125,7 @@ def build_master_pack(input_audio: Path, work_root: Path, model_dir: Path, outpu
     bs_out = job_root / "bs_roformer_sw"
     dem_out = job_root / "demucs6s"
     dem_stems = dem_out / "htdemucs_6s" / track
-    master = output_root / f"{track}-litelabs-stem-pack"
+    master = output_root / f"{track}-litelabs-{output_format}-stem-pack"
 
     for folder in (song_dir, bs_out, dem_out, master):
         folder.mkdir(parents=True, exist_ok=True)
@@ -139,20 +167,21 @@ def build_master_pack(input_audio: Path, work_root: Path, model_dir: Path, outpu
     }.items():
         require_file(path, label)
 
-    notify(progress, "Building vocals.flac", 68)
-    ffmpeg_to_flac(bs_vocals, master / f"01_{track}_vocals.flac")
-    notify(progress, "Building drums.flac", 71)
-    ffmpeg_to_flac(bs_drums, master / f"02_{track}_drums.flac")
-    notify(progress, "Building bass.flac", 74)
-    shutil.copy2(dem_stems / "bass.flac", master / f"03_{track}_bass.flac")
-    notify(progress, "Building guitar.flac", 77)
-    ffmpeg_to_flac(bs_guitar, master / f"04_{track}_guitar.flac")
-    notify(progress, "Building piano_keys.flac", 80)
-    ffmpeg_to_flac(bs_piano, master / f"05_{track}_piano_keys.flac")
-    notify(progress, "Building synth_strings_other.flac", 83)
-    ffmpeg_to_flac(bs_other, master / f"06_{track}_synth_strings_other.flac")
+    notify(progress, f"Building vocals.{ext}", 68)
+    convert_audio(bs_vocals, master / f"01_{track}_vocals.{ext}", output_format)
+    notify(progress, f"Building drums.{ext}", 71)
+    convert_audio(bs_drums, master / f"02_{track}_drums.{ext}", output_format)
+    notify(progress, f"Building bass.{ext}", 74)
+    copy_or_convert_audio(dem_stems / "bass.flac", master / f"03_{track}_bass.{ext}", output_format)
+    notify(progress, f"Building guitar.{ext}", 77)
+    convert_audio(bs_guitar, master / f"04_{track}_guitar.{ext}", output_format)
+    notify(progress, f"Building piano_keys.{ext}", 80)
+    convert_audio(bs_piano, master / f"05_{track}_piano_keys.{ext}", output_format)
+    notify(progress, f"Building synth_strings_other.{ext}", 83)
+    convert_audio(bs_other, master / f"06_{track}_synth_strings_other.{ext}", output_format)
 
-    notify(progress, "Building clean instrumental.flac", 86)
+    notify(progress, f"Building clean instrumental.{ext}", 86)
+    instrumental_wav = job_root / f"{track}_instrumental_clean.wav"
     run([
         "ffmpeg", "-y",
         "-i", dem_stems / "bass.flac",
@@ -161,19 +190,20 @@ def build_master_pack(input_audio: Path, work_root: Path, model_dir: Path, outpu
         "-i", dem_stems / "piano.flac",
         "-i", dem_stems / "other.flac",
         "-filter_complex", "amix=inputs=5:duration=longest:normalize=0",
-        "-c:a", "flac",
-        master / f"07_{track}_instrumental_clean.flac",
+        instrumental_wav,
     ])
+    convert_audio(instrumental_wav, master / f"07_{track}_instrumental_clean.{ext}", output_format)
 
     notify(progress, "Writing README", 87)
-    write_litelabs_readme(master / "README.txt", track)
+    write_litelabs_readme(master / "README.txt", track, output_format)
 
-    archive = output_root / f"{track}-litelabs-stem-pack.zip"
+    archive = output_root / f"{track}-litelabs-{output_format}-stem-pack.zip"
     make_zip_archive(master, archive, master.name, progress)
 
     return {
         "track": track,
         "archive_path": str(archive),
+        "output_format": output_format,
         "stems": sorted(p.name for p in master.iterdir() if p.is_file()),
     }
 
@@ -186,9 +216,10 @@ def main() -> None:
     parser.add_argument("--work-root", type=Path, default=Path("/tmp/stemforge/work"))
     parser.add_argument("--output-root", type=Path, default=Path("/tmp/stemforge/output"))
     parser.add_argument("--model-dir", type=Path, default=Path(os.getenv("STEMFORGE_MODEL_DIR", "/models/bs_roformer_sw")))
+    parser.add_argument("--output-format", default="flac", choices=["mp3", "flac"])
     args = parser.parse_args()
 
-    result = build_master_pack(args.input_audio, args.work_root, args.model_dir, args.output_root)
+    result = build_master_pack(args.input_audio, args.work_root, args.model_dir, args.output_root, output_format=args.output_format)
     print(result)
 
 
