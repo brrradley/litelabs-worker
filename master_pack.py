@@ -4,11 +4,25 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 ProgressCallback = Callable[[str, int], None]
+
+
+@dataclass
+class StemDecision:
+    label: str
+    source: Path
+    include: bool
+    reason: str
+    score: float
+    active_ratio: float
+    mean_db: float
+    max_db: float
 
 
 def safe_track_name(filename: str) -> str:
@@ -22,9 +36,41 @@ def safe_output_format(value: str | None) -> str:
     return value if value in {"mp3", "flac"} else "flac"
 
 
+def format_bytes(num_bytes: int) -> str:
+    if num_bytes >= 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
+    if num_bytes >= 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.2f} MB"
+    if num_bytes >= 1024:
+        return f"{num_bytes / 1024:.2f} KB"
+    return f"{num_bytes} bytes"
+
+
+def format_elapsed(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours} hours, {minutes} minutes, {secs} seconds"
+    if minutes:
+        return f"{minutes} minutes, {secs} seconds"
+    return f"{secs} seconds"
+
+
 def run(cmd: list[str | Path]) -> None:
     print("\nRUN:", " ".join(str(x) for x in cmd), flush=True)
     subprocess.run([str(x) for x in cmd], check=True)
+
+
+def run_capture(cmd: list[str | Path]) -> str:
+    completed = subprocess.run(
+        [str(x) for x in cmd],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    return completed.stdout or ""
 
 
 def notify(progress: ProgressCallback | None, message: str, percent: int) -> None:
@@ -36,6 +82,115 @@ def notify(progress: ProgressCallback | None, message: str, percent: int) -> Non
 def require_file(path: Path, label: str) -> None:
     if not path.exists():
         raise FileNotFoundError(f"Missing {label}: {path}")
+
+
+def probe_duration(path: Path) -> float:
+    output = run_capture([
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        path,
+    ]).strip()
+    try:
+        return float(output)
+    except ValueError:
+        return 0.0
+
+
+def parse_float(pattern: str, text: str, default: float) -> float:
+    match = re.search(pattern, text)
+    if not match:
+        return default
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return default
+
+
+def analyse_audio(path: Path) -> dict:
+    duration = probe_duration(path)
+
+    vol = run_capture([
+        "ffmpeg",
+        "-hide_banner",
+        "-nostats",
+        "-i", path,
+        "-af", "volumedetect",
+        "-f", "null",
+        "-",
+    ])
+    mean_db = parse_float(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", vol, -99.0)
+    max_db = parse_float(r"max_volume:\s*(-?\d+(?:\.\d+)?) dB", vol, -99.0)
+
+    silence = run_capture([
+        "ffmpeg",
+        "-hide_banner",
+        "-nostats",
+        "-i", path,
+        "-af", "silencedetect=noise=-45dB:d=0.30",
+        "-f", "null",
+        "-",
+    ])
+    silence_total = 0.0
+    for value in re.findall(r"silence_duration:\s*(\d+(?:\.\d+)?)", silence):
+        try:
+            silence_total += float(value)
+        except ValueError:
+            pass
+
+    if duration > 0:
+        active_ratio = max(0.0, min(1.0, (duration - silence_total) / duration))
+    else:
+        active_ratio = 0.0
+
+    loudness_score = max(0.0, min(1.0, (mean_db + 45.0) / 30.0))
+    peak_score = max(0.0, min(1.0, (max_db + 35.0) / 25.0))
+    score = round((active_ratio * 0.55) + (loudness_score * 0.30) + (peak_score * 0.15), 3)
+
+    return {
+        "duration": duration,
+        "mean_db": mean_db,
+        "max_db": max_db,
+        "active_ratio": active_ratio,
+        "score": score,
+    }
+
+
+def optional_stem_decision(label: str, source: Path) -> StemDecision:
+    stats = analyse_audio(source)
+    score = float(stats["score"])
+    active_ratio = float(stats["active_ratio"])
+    mean_db = float(stats["mean_db"])
+    max_db = float(stats["max_db"])
+
+    if max_db <= -45.0:
+        return StemDecision(label, source, False, "not confidently detected", score, active_ratio, mean_db, max_db)
+    if active_ratio < 0.08:
+        return StemDecision(label, source, False, "low activity", score, active_ratio, mean_db, max_db)
+    if mean_db < -38.0 and score < 0.42:
+        return StemDecision(label, source, False, "low confidence / mostly bleed", score, active_ratio, mean_db, max_db)
+    if score < 0.34:
+        return StemDecision(label, source, False, "low confidence", score, active_ratio, mean_db, max_db)
+
+    return StemDecision(label, source, True, "confidently detected", score, active_ratio, mean_db, max_db)
+
+
+def detect_track_type(decisions: list[StemDecision], core_stats: dict[str, dict]) -> str:
+    included = {d.label for d in decisions if d.include}
+    vocals = core_stats.get("Vocals", {}).get("score", 0.0)
+    drums = core_stats.get("Drums", {}).get("score", 0.0)
+    bass = core_stats.get("Bass", {}).get("score", 0.0)
+
+    if "Guitar" in included and drums > 0.45:
+        return "rock_band"
+    if "Synths / Strings / Other" in included and "Guitar" not in included and drums > 0.45 and bass > 0.35:
+        return "electronic_dance"
+    if vocals > 0.45 and len(included) <= 1 and drums < 0.35:
+        return "vocal_pop_or_sparse"
+    if drums < 0.25 and bass < 0.25 and len(included) <= 1:
+        return "acoustic_or_sparse"
+    return "mixed_or_unknown"
 
 
 def convert_audio(src: Path, dest: Path, output_format: str) -> None:
@@ -54,14 +209,32 @@ def copy_or_convert_audio(src: Path, dest: Path, output_format: str) -> None:
         convert_audio(src, dest, output_format)
 
 
-def write_litelabs_readme(path: Path, track: str, output_format: str) -> None:
+def write_litelabs_readme(
+    path: Path,
+    track: str,
+    output_format: str,
+    pack_size: str,
+    elapsed_time: str,
+    track_type: str,
+    included_stems: list[str],
+    omitted_stems: list[tuple[str, str]],
+) -> None:
     ext = safe_output_format(output_format).upper()
+
+    included_lines = "\n".join(included_stems) if included_stems else "None"
+    if omitted_stems:
+        omitted_lines = "\n".join(f"{label} — {reason}" for label, reason in omitted_stems)
+        omitted_section = f"\n\nOmitted stems:\n\n{omitted_lines}"
+    else:
+        omitted_section = ""
+
     path.write_text(
-        f"LiteLABS by LiteRECORDS\n\n"
+        "Stem Extraction Tools by LiteLABS\n\n"
         f"Track: {track}\n"
-        f"Output format: {ext}\n\n"
-        "Created by LiteRECORDS\n"
-        "https://literecords.com\n\n"
+        f"Output format: {ext}\n"
+        f"Stem pack size: {pack_size}\n"
+        f"Elapsed time: {elapsed_time}\n"
+        f"Detected track type: {track_type}\n\n"
         "This stem pack was generated using LiteLABS, an experimental music tool created by "
         "LiteRECORDS to support musicians, producers, remixers, DJs, and learners. LiteLABS "
         "is designed for educational, creative, and restoration purposes, helping users study "
@@ -72,14 +245,10 @@ def write_litelabs_readme(path: Path, track: str, output_format: str) -> None:
         "to use, or are legally allowed to study or transform. LiteRECORDS is committed to supporting "
         "musicians and encouraging responsible, creative use of music technology.\n\n"
         "Included stems:\n\n"
-        "01 Vocals\n"
-        "02 Drums\n"
-        "03 Bass\n"
-        "04 Guitar\n"
-        "05 Piano / Keys\n"
-        "06 Synths / Strings / Other\n"
-        "07 Clean Instrumental\n\n"
-        "Generated with care by LiteLABS.\n",
+        f"{included_lines}"
+        f"{omitted_section}\n\n"
+        "Generated with care by LiteLABS.\n"
+        "https://literecords.com\n",
         encoding="utf-8",
     )
 
@@ -107,6 +276,8 @@ def build_master_pack(
     progress: ProgressCallback | None = None,
     output_format: str = "flac",
 ) -> dict:
+    started_at = time.monotonic()
+
     input_audio = input_audio.resolve()
     work_root = work_root.resolve()
     model_dir = model_dir.resolve()
@@ -125,7 +296,7 @@ def build_master_pack(
     bs_out = job_root / "bs_roformer_sw"
     dem_out = job_root / "demucs6s"
     dem_stems = dem_out / "htdemucs_6s" / track
-    master = output_root / f"{track}-litelabs-{output_format}-stem-pack"
+    master = output_root / f"{track}-stem-extraction-tools-{output_format}-pack"
 
     for folder in (song_dir, bs_out, dem_out, master):
         folder.mkdir(parents=True, exist_ok=True)
@@ -167,20 +338,47 @@ def build_master_pack(
     }.items():
         require_file(path, label)
 
-    notify(progress, f"Building vocals.{ext}", 68)
-    convert_audio(bs_vocals, master / f"01_{track}_vocals.{ext}", output_format)
-    notify(progress, f"Building drums.{ext}", 71)
-    convert_audio(bs_drums, master / f"02_{track}_drums.{ext}", output_format)
-    notify(progress, f"Building bass.{ext}", 74)
-    copy_or_convert_audio(dem_stems / "bass.flac", master / f"03_{track}_bass.{ext}", output_format)
-    notify(progress, f"Building guitar.{ext}", 77)
-    convert_audio(bs_guitar, master / f"04_{track}_guitar.{ext}", output_format)
-    notify(progress, f"Building piano_keys.{ext}", 80)
-    convert_audio(bs_piano, master / f"05_{track}_piano_keys.{ext}", output_format)
-    notify(progress, f"Building synth_strings_other.{ext}", 83)
-    convert_audio(bs_other, master / f"06_{track}_synth_strings_other.{ext}", output_format)
+    notify(progress, "Analysing stem confidence", 67)
+    optional_decisions = [
+        optional_stem_decision("Guitar", bs_guitar),
+        optional_stem_decision("Piano / Keys", bs_piano),
+        optional_stem_decision("Synths / Strings / Other", bs_other),
+    ]
+    core_stats = {
+        "Vocals": analyse_audio(bs_vocals),
+        "Drums": analyse_audio(bs_drums),
+        "Bass": analyse_audio(dem_stems / "bass.flac"),
+    }
+    track_type = detect_track_type(optional_decisions, core_stats)
 
-    notify(progress, f"Building clean instrumental.{ext}", 86)
+    included_readme: list[str] = []
+    omitted_readme: list[tuple[str, str]] = []
+    output_index = 1
+
+    def add_stem(label: str, src: Path, slug: str, percent: int) -> None:
+        nonlocal output_index
+        display_name = f"{output_index:02d} {label}"
+        notify(progress, f"Building {display_name}.{ext}", percent)
+        copy_or_convert_audio(src, master / f"{output_index:02d}_{track}_{slug}.{ext}", output_format)
+        included_readme.append(display_name)
+        output_index += 1
+
+    add_stem("Vocals", bs_vocals, "vocals", 68)
+    add_stem("Drums", bs_drums, "drums", 71)
+    add_stem("Bass", dem_stems / "bass.flac", "bass", 74)
+
+    for decision, slug, percent in [
+        (optional_decisions[0], "guitar", 77),
+        (optional_decisions[1], "piano_keys", 80),
+        (optional_decisions[2], "synth_strings_other", 83),
+    ]:
+        if decision.include:
+            add_stem(decision.label, decision.source, slug, percent)
+        else:
+            notify(progress, f"Omitting {decision.label}: {decision.reason}", percent)
+            omitted_readme.append((decision.label, decision.reason))
+
+    notify(progress, f"Building Clean Instrumental.{ext}", 86)
     instrumental_wav = job_root / f"{track}_instrumental_clean.wav"
     run([
         "ffmpeg", "-y",
@@ -192,18 +390,46 @@ def build_master_pack(
         "-filter_complex", "amix=inputs=5:duration=longest:normalize=0",
         instrumental_wav,
     ])
-    convert_audio(instrumental_wav, master / f"07_{track}_instrumental_clean.{ext}", output_format)
+    copy_or_convert_audio(instrumental_wav, master / f"{output_index:02d}_{track}_instrumental_clean.{ext}", output_format)
+    included_readme.append(f"{output_index:02d} Clean Instrumental")
+
+    archive = output_root / f"{track}-stem-extraction-tools-{output_format}-pack.zip"
 
     notify(progress, "Writing README", 87)
-    write_litelabs_readme(master / "README.txt", track, output_format)
+    write_litelabs_readme(
+        master / "README.txt",
+        track,
+        output_format,
+        "calculating",
+        format_elapsed(time.monotonic() - started_at),
+        track_type,
+        included_readme,
+        omitted_readme,
+    )
 
-    archive = output_root / f"{track}-litelabs-{output_format}-stem-pack.zip"
+    make_zip_archive(master, archive, master.name, progress)
+    final_size = format_bytes(archive.stat().st_size)
+
+    notify(progress, "Finalising README", 91)
+    write_litelabs_readme(
+        master / "README.txt",
+        track,
+        output_format,
+        final_size,
+        format_elapsed(time.monotonic() - started_at),
+        track_type,
+        included_readme,
+        omitted_readme,
+    )
     make_zip_archive(master, archive, master.name, progress)
 
     return {
         "track": track,
         "archive_path": str(archive),
         "output_format": output_format,
+        "track_type": track_type,
+        "included_stems": included_readme,
+        "omitted_stems": [{"label": label, "reason": reason} for label, reason in omitted_readme],
         "stems": sorted(p.name for p in master.iterdir() if p.is_file()),
     }
 
