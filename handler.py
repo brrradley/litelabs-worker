@@ -20,16 +20,7 @@ def post_progress(url: str | None, token: str | None, job_id: str | int | None, 
     if not url or not token or not job_id:
         return
     try:
-        requests.post(
-            url,
-            json={
-                "token": token,
-                "job_id": job_id,
-                "message": message,
-                "percent": max(0, min(100, int(percent))),
-            },
-            timeout=8,
-        )
+        requests.post(url, json={"token": token, "job_id": job_id, "message": message, "percent": max(0, min(100, int(percent)))}, timeout=8)
     except Exception as exc:
         print(f"LiteLABS progress callback failed: {exc}", flush=True)
 
@@ -92,7 +83,11 @@ def patch_genre_routing() -> None:
         dominant_guitar = strong_guitar and guitar > max(synth_other + 0.18, 0.66)
         strong_piano = "Piano / Keys" in included and piano >= 0.42
         strong_synth = "Synths / Strings / Other" in included and synth_other >= 0.38
-        dance_like = strong_rhythm and (strong_synth or not dominant_guitar or bass >= 0.42)
+
+        if strong_rhythm and dominant_guitar:
+            return "rock_band", "strong drums with dominant confident guitar activity"
+
+        dance_like = strong_rhythm and (strong_synth or not strong_guitar or bass >= 0.42)
         if dance_like:
             details = ["strong drums/bass"]
             if strong_synth:
@@ -100,8 +95,6 @@ def patch_genre_routing() -> None:
             if strong_guitar and not dominant_guitar:
                 details.append("guitar appears secondary/sample-like")
             return "electronic_dance", ", ".join(details)
-        if strong_rhythm and dominant_guitar:
-            return "rock_band", "strong drums with dominant confident guitar activity"
         if strong_piano and strong_vocal and drums < 0.42:
             return "piano_vocal_or_pop_ballad", "confident piano/keys with strong vocal and lighter drums"
         if strong_vocal and drums >= 0.35 and bass >= 0.25 and not dominant_guitar:
@@ -135,12 +128,7 @@ def analyse_source_features(path: Path) -> dict:
         freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
         total = float(spectrum.sum()) + 1e-9
         bass_mask = (freqs >= 55) & (freqs < 250)
-        return {
-            "tempo": round(tempo_value, 2),
-            "beat_count": int(len(beats)),
-            "percussive_ratio": round(float(percussive_ratio), 3),
-            "bass_ratio": round(float(spectrum[bass_mask].sum() / total), 3),
-        }
+        return {"tempo": round(tempo_value, 2), "beat_count": int(len(beats)), "percussive_ratio": round(float(percussive_ratio), 3), "bass_ratio": round(float(spectrum[bass_mask].sum() / total), 3)}
     except Exception as exc:
         print(f"LiteLABS source feature analysis skipped: {exc}", flush=True)
         return {}
@@ -151,8 +139,8 @@ def source_genre_override(features: dict) -> tuple[str | None, str | None]:
     percussive = float(features.get("percussive_ratio", 0.0) or 0.0)
     bass = float(features.get("bass_ratio", 0.0) or 0.0)
     dance_tempo = 118.0 <= tempo <= 136.0
-    if (dance_tempo and percussive >= 0.42) or (percussive >= 0.52 and bass >= 0.12):
-        reason = f"source audio has dance-like rhythm profile"
+    if (dance_tempo and percussive >= 0.48 and bass >= 0.13) or (percussive >= 0.62 and bass >= 0.15):
+        reason = "source audio has dance-like rhythm profile"
         if tempo:
             reason += f" ({tempo:.0f} BPM, percussive {percussive:.2f})"
         return "electronic_dance", reason
@@ -170,6 +158,13 @@ def rebuild_archive(root: Path, archive_path: Path) -> None:
                 zip_file.write(path, arcname=str(path.relative_to(root)))
 
 
+def read_detected_genre(readme: Path | None) -> str:
+    if not readme or not readme.exists():
+        return ""
+    match = re.search(r"Detected genre:\s*(.+)", readme.read_text(encoding="utf-8", errors="replace"))
+    return match.group(1).strip() if match else ""
+
+
 def post_process_archive(archive_path: Path, source_features: dict) -> list[str]:
     import master_pack
 
@@ -181,6 +176,15 @@ def post_process_archive(archive_path: Path, source_features: dict) -> list[str]
             zip_file.extractall(root)
         files = [p for p in root.rglob("*") if p.is_file()]
         readme = next((p for p in files if p.name == "README.txt"), None)
+        current_genre = read_detected_genre(readme)
+
+        guitar_file = next((p for p in files if "_guitar." in p.name.lower()), None)
+        synth_file = next((p for p in files if "_synth_strings_other." in p.name.lower()), None)
+        guitar_stats = master_pack.analyse_audio(guitar_file) if guitar_file else {}
+        synth_stats = master_pack.analyse_audio(synth_file) if synth_file else {}
+        guitar_score = float(guitar_stats.get("score", 0.0))
+        synth_score = float(synth_stats.get("score", 0.0))
+        protect_rock = current_genre == "rock_band" and guitar_score >= max(synth_score + 0.18, 0.68)
 
         omitted_notes: list[str] = []
         sparse_hint = genre_reason == "sparse source profile"
@@ -208,10 +212,13 @@ def post_process_archive(archive_path: Path, source_features: dict) -> list[str]
 
         if readme and readme.exists():
             text = readme.read_text(encoding="utf-8", errors="replace")
-            if genre_override:
+            if genre_override and not protect_rock:
                 text = re.sub(r"Detected genre: .+", f"Detected genre: {genre_override}", text)
                 text = re.sub(r"Genre reason: .+", f"Genre reason: {genre_reason}", text)
                 changes.append(f"genre set to {genre_override}")
+            elif protect_rock:
+                text = re.sub(r"Genre reason: .+", "Genre reason: dominant guitar protected from dance override", text)
+                changes.append("rock genre protected")
             if omitted_notes:
                 if "Omitted stems:" in text:
                     text = text.replace("\n\nGenerated with care", "\n" + "\n".join(omitted_notes) + "\n\nGenerated with care")
@@ -287,17 +294,7 @@ def handler(job: dict) -> dict:
                 uploaded = True
                 progress("Finalising download", 98)
 
-            return {
-                "ok": True,
-                "track": result["track"],
-                "output_format": result.get("output_format", output_format),
-                "archive_size_bytes": archive_size,
-                "uploaded": uploaded,
-                "result_url": result_public_url,
-                "stems": result["stems"],
-                "post_process_changes": post_changes,
-                "source_features": source_features,
-            }
+            return {"ok": True, "track": result["track"], "output_format": result.get("output_format", output_format), "archive_size_bytes": archive_size, "uploaded": uploaded, "result_url": result_public_url, "stems": result["stems"], "post_process_changes": post_changes, "source_features": source_features}
     except Exception as exc:
         post_progress(progress_url, progress_token, progress_job_id, f"Worker error: {exc}", 100)
         return {"ok": False, "error": str(exc), "error_type": exc.__class__.__name__}
