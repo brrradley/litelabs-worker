@@ -176,21 +176,50 @@ def optional_stem_decision(label: str, source: Path) -> StemDecision:
     return StemDecision(label, source, True, "confidently detected", score, active_ratio, mean_db, max_db)
 
 
-def detect_track_type(decisions: list[StemDecision], core_stats: dict[str, dict]) -> str:
-    included = {d.label for d in decisions if d.include}
-    vocals = core_stats.get("Vocals", {}).get("score", 0.0)
-    drums = core_stats.get("Drums", {}).get("score", 0.0)
-    bass = core_stats.get("Bass", {}).get("score", 0.0)
+def score_of(stats: dict[str, dict], label: str) -> float:
+    return float(stats.get(label, {}).get("score", 0.0))
 
-    if "Guitar" in included and drums > 0.45:
-        return "rock_band"
-    if "Synths / Strings / Other" in included and "Guitar" not in included and drums > 0.45 and bass > 0.35:
-        return "electronic_dance"
-    if vocals > 0.45 and len(included) <= 1 and drums < 0.35:
-        return "vocal_pop_or_sparse"
-    if drums < 0.25 and bass < 0.25 and len(included) <= 1:
-        return "acoustic_or_sparse"
-    return "mixed_or_unknown"
+
+def active_of(stats: dict[str, dict], label: str) -> float:
+    return float(stats.get(label, {}).get("active_ratio", 0.0))
+
+
+def detect_genre_from_audio(decisions: list[StemDecision], core_stats: dict[str, dict], original_stats: dict) -> tuple[str, str]:
+    """Return a practical audio-derived genre/track-type label plus a short explanation.
+
+    This deliberately does not use file metadata. It uses the separated stem activity as the first
+    reliable signal, because that is what we can validate and tune from real LiteRECORDS uploads.
+    """
+    included = {d.label for d in decisions if d.include}
+    optional_scores = {d.label: d.score for d in decisions}
+
+    vocals = score_of(core_stats, "Vocals")
+    drums = score_of(core_stats, "Drums")
+    bass = score_of(core_stats, "Bass")
+    guitar = optional_scores.get("Guitar", 0.0)
+    piano = optional_scores.get("Piano / Keys", 0.0)
+    synth_other = optional_scores.get("Synths / Strings / Other", 0.0)
+    original_active = float(original_stats.get("active_ratio", 0.0))
+
+    strong_rhythm = drums >= 0.46 and bass >= 0.34
+    strong_vocal = vocals >= 0.45
+    strong_guitar = "Guitar" in included and guitar >= 0.42
+    strong_piano = "Piano / Keys" in included and piano >= 0.42
+    strong_synth = "Synths / Strings / Other" in included and synth_other >= 0.42
+
+    if strong_rhythm and strong_synth and not strong_guitar:
+        return "electronic_dance", "strong drums/bass with active synth/other and no confident guitar"
+    if strong_rhythm and strong_guitar:
+        return "rock_band", "strong drums with confident guitar activity"
+    if strong_piano and strong_vocal and drums < 0.42:
+        return "piano_vocal_or_pop_ballad", "confident piano/keys with strong vocal and lighter drums"
+    if strong_vocal and drums >= 0.35 and bass >= 0.25 and not strong_guitar:
+        return "vocal_pop", "strong vocal with moderate rhythm section and no confident guitar"
+    if strong_vocal and original_active > 0.35 and drums < 0.30 and bass < 0.30:
+        return "acoustic_or_sparse", "strong vocal with low drum/bass activity"
+    if strong_rhythm and not strong_vocal:
+        return "instrumental_or_dance", "strong drums/bass with weaker vocal presence"
+    return "mixed_or_unknown", "audio features did not strongly match a known route"
 
 
 def convert_audio(src: Path, dest: Path, output_format: str) -> None:
@@ -215,7 +244,8 @@ def write_litelabs_readme(
     output_format: str,
     pack_size: str,
     elapsed_time: str,
-    track_type: str,
+    detected_genre: str,
+    genre_reason: str,
     included_stems: list[str],
     omitted_stems: list[tuple[str, str]],
 ) -> None:
@@ -234,7 +264,8 @@ def write_litelabs_readme(
         f"Output format: {ext}\n"
         f"Stem pack size: {pack_size}\n"
         f"Elapsed time: {elapsed_time}\n"
-        f"Detected track type: {track_type}\n\n"
+        f"Detected genre: {detected_genre}\n"
+        f"Genre reason: {genre_reason}\n\n"
         "This stem pack was generated using LiteLABS, an experimental music tool created by "
         "LiteRECORDS to support musicians, producers, remixers, DJs, and learners. LiteLABS "
         "is designed for educational, creative, and restoration purposes, helping users study "
@@ -338,7 +369,7 @@ def build_master_pack(
     }.items():
         require_file(path, label)
 
-    notify(progress, "Analysing stem confidence", 67)
+    notify(progress, "Analysing audio and stem confidence", 67)
     optional_decisions = [
         optional_stem_decision("Guitar", bs_guitar),
         optional_stem_decision("Piano / Keys", bs_piano),
@@ -349,7 +380,9 @@ def build_master_pack(
         "Drums": analyse_audio(bs_drums),
         "Bass": analyse_audio(dem_stems / "bass.flac"),
     }
-    track_type = detect_track_type(optional_decisions, core_stats)
+    original_stats = analyse_audio(wav_file)
+    detected_genre, genre_reason = detect_genre_from_audio(optional_decisions, core_stats, original_stats)
+    print(f"LiteLABS detected genre: {detected_genre} ({genre_reason})", flush=True)
 
     included_readme: list[str] = []
     omitted_readme: list[tuple[str, str]] = []
@@ -402,7 +435,8 @@ def build_master_pack(
         output_format,
         "calculating",
         format_elapsed(time.monotonic() - started_at),
-        track_type,
+        detected_genre,
+        genre_reason,
         included_readme,
         omitted_readme,
     )
@@ -417,7 +451,8 @@ def build_master_pack(
         output_format,
         final_size,
         format_elapsed(time.monotonic() - started_at),
-        track_type,
+        detected_genre,
+        genre_reason,
         included_readme,
         omitted_readme,
     )
@@ -427,7 +462,8 @@ def build_master_pack(
         "track": track,
         "archive_path": str(archive),
         "output_format": output_format,
-        "track_type": track_type,
+        "detected_genre": detected_genre,
+        "genre_reason": genre_reason,
         "included_stems": included_readme,
         "omitted_stems": [{"label": label, "reason": reason} for label, reason in omitted_readme],
         "stems": sorted(p.name for p in master.iterdir() if p.is_file()),
