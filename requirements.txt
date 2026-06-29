@@ -3,4 +3,4 @@ requests
 bs-roformer-infer
 demucs
 librosa
-audio-separator[gpu]
+audio-separator
