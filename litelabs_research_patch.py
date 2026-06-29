@@ -20,8 +20,11 @@ text = text.replace(
     '    if (dance_tempo and percussive >= 0.48 and bass >= 0.13) or (percussive >= 0.62 and bass >= 0.15):',
     '    rap_tempo = 75.0 <= tempo <= 115.0\n    if rap_tempo and 0.32 <= percussive <= 0.58 and bass >= 0.13:\n        reason = "source audio has rap/hip-hop-like rhythm profile"\n        if tempo:\n            reason += f" ({tempo:.0f} BPM, percussive {percussive:.2f})"\n        return "hip_hop_rap", reason\n    if (dance_tempo and percussive >= 0.48 and bass >= 0.13) or (percussive >= 0.62 and bass >= 0.15):',
 )
+text = text.replace(
+    '        genre_override, genre_reason = source_genre_override(source_features)',
+    '        genre_override, genre_reason = source_genre_override(source_features)\n        tempo = float(source_features.get("tempo", 0.0) or 0.0)\n        percussive = float(source_features.get("percussive_ratio", 0.0) or 0.0)\n        bass = float(source_features.get("bass_ratio", 0.0) or 0.0)\n        if 75.0 <= tempo <= 115.0 and 0.32 <= percussive <= 0.58 and bass >= 0.13:\n            genre_override = "hip_hop_rap"\n            genre_reason = f"source audio has rap/hip-hop-like rhythm profile ({tempo:.0f} BPM, percussive {percussive:.2f})"',
+)
 
-# Replace the classifier and add dry-vocal validation helpers.
 start = text.find('def classify_extra_vocal_outputs(files: list[Path]) -> dict[str, Path]:')
 end = text.find('\ndef is_useful_extra_vocal', start)
 if start != -1 and end != -1:
@@ -46,20 +49,20 @@ if start != -1 and end != -1:
 def pick_dry_vocal_output(files: list[Path]) -> Path | None:
     if not files:
         return None
-    def rank(file: Path) -> tuple[int, int]:
+    accepted = []
+    for file in files:
         lower = file.name.lower()
         normalised = lower.replace("_", " ").replace("-", " ")
+        is_reverb_residual = ("reverb" in normalised or "echo" in normalised) and not ("no reverb" in normalised or "no echo" in normalised)
+        if is_reverb_residual or "instrumental" in lower:
+            continue
         if "no reverb" in normalised or "no echo" in normalised:
-            return (0, -file.stat().st_size)
-        if "dry" in normalised or "dereverb" in normalised or "deverb" in normalised:
-            return (1, -file.stat().st_size)
-        if "(vocals)" in lower:
-            return (2, -file.stat().st_size)
-        if "reverb" in normalised or "echo" in normalised or "instrumental" in lower:
-            return (9, -file.stat().st_size)
-        return (4, -file.stat().st_size)
-    ordered = sorted(files, key=rank)
-    return ordered[0] if rank(ordered[0])[0] < 9 else None
+            accepted.append((0, -file.stat().st_size, file))
+        elif "dry" in normalised or "dereverb" in normalised or "deverb" in normalised:
+            accepted.append((1, -file.stat().st_size, file))
+    if not accepted:
+        return None
+    return sorted(accepted)[0][2]
 
 
 def is_valid_dry_main_vocal(source: Path, dry: Path) -> tuple[bool, str]:
@@ -93,7 +96,7 @@ block_end = text.find('    append_readme_notes(readme, included_notes, omitted_n
 if block_start == -1 or block_end == -1:
     raise SystemExit('extra vocal block not found')
 new_block = '''    try:
-        backing_args = ["--vr_aggression", os.getenv("LITELABS_BACKING_VR_AGGRESSION", "14"), "--vr_enable_post_process", "--vr_post_process_threshold", os.getenv("LITELABS_BACKING_POST_THRESHOLD", "0.10")]
+        backing_args = ["--vr_aggression", os.getenv("LITELABS_BACKING_VR_AGGRESSION", "16"), "--vr_enable_post_process", "--vr_post_process_threshold", os.getenv("LITELABS_BACKING_POST_THRESHOLD", "0.10")]
         backing_outputs = run_audio_separator(vocal_file, temp_root / "backing", model_backing, output_format, backing_args)
         backing_candidate = next((p for p in backing_outputs if "(vocals)" in p.name.lower()), None)
         if not backing_candidate:
@@ -131,7 +134,7 @@ new_block = '''    try:
             else:
                 omitted_notes.append(f"Dry Main Vocals — {dry_reason if not valid_dry else reason}")
         else:
-            omitted_notes.append("Dry Main Vocals — dereverb model did not produce a dry vocal file")
+            omitted_notes.append("Dry Main Vocals — dereverb model only produced reverb/residual, not a dry main vocal")
     except Exception as exc:
         print(f"LiteLABS dry vocal pass skipped: {exc}", flush=True)
         omitted_notes.append("Dry Main Vocals — experimental dry vocal pass failed for this track")
