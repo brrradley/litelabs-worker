@@ -4,3 +4,4 @@ bs-roformer-infer
 demucs
 librosa
 audio-separator==0.44.2
+onnxruntime-gpu>=1.17
