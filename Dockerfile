@@ -4,12 +4,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV STEMFORGE_MODEL_DIR=/models/bs_roformer_sw
+ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     ffmpeg \
     git \
+    build-essential \
+    pkg-config \
+    libsamplerate0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -21,5 +25,7 @@ RUN python -m pip install --upgrade pip setuptools wheel && \
 
 COPY master_pack.py /app/master_pack.py
 COPY handler.py /app/handler.py
+COPY litelabs_live_patch.py /app/litelabs_live_patch.py
+RUN python /app/litelabs_live_patch.py
 
 CMD ["python", "-u", "/app/handler.py"]
