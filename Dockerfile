@@ -10,14 +10,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ffmpeg \
     git \
+    build-essential \
+    pkg-config \
+    libsamplerate0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt /app/requirements.txt
 
-RUN python -m pip install --upgrade pip setuptools wheel && \
-    python -m pip install -r /app/requirements.txt
+RUN python -m pip install --upgrade pip setuptools wheel
+RUN python -m pip install -r /app/requirements.txt
 
 COPY master_pack.py /app/master_pack.py
 COPY research_tools.py /app/research_tools.py
