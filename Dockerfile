@@ -14,5 +14,7 @@ RUN mkdir -p /models/audio_separator
 COPY handler.py /app/handler.py
 COPY research_tools.py /app/research_tools.py
 COPY research_bootstrap.py /app/research_bootstrap.py
+COPY litelabs_research_slim_patch.py /app/litelabs_research_slim_patch.py
+RUN python /app/litelabs_research_slim_patch.py
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
