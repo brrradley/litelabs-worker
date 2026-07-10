@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - research
   workflow_dispatch:
 
 permissions:
@@ -24,12 +25,20 @@ jobs:
       - name: Set lowercase owner
         run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
-      - name: Set image tag prefix
+      - name: Set image tags
         run: |
           if [ "${GITHUB_REF_NAME}" = "research" ]; then
-            echo "TAG_PREFIX=research" >> "$GITHUB_ENV"
+            echo "IMAGE_TAGS<<EOF" >> "$GITHUB_ENV"
+            echo "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:research" >> "$GITHUB_ENV"
+            echo "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:research-bakeoff-1" >> "$GITHUB_ENV"
+            echo "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:research-${GITHUB_SHA}" >> "$GITHUB_ENV"
+            echo "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
           else
-            echo "TAG_PREFIX=latest" >> "$GITHUB_ENV"
+            echo "IMAGE_TAGS<<EOF" >> "$GITHUB_ENV"
+            echo "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:latest" >> "$GITHUB_ENV"
+            echo "ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}:${GITHUB_SHA}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
           fi
 
       - name: Log in to GitHub Container Registry
@@ -47,6 +56,6 @@ jobs:
         with:
           context: .
           push: true
-          tags: |
-            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ env.TAG_PREFIX }}
-            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          pull: true
+          no-cache: true
+          tags: ${{ env.IMAGE_TAGS }}
