@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -60,6 +61,65 @@ def infer_filename(url: str, fallback: str) -> str:
     return parsed_name or fallback
 
 
+def run_discovery_command(cmd: list[str], timeout: int = 90) -> dict:
+    try:
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+        return {
+            "command": cmd,
+            "returncode": completed.returncode,
+            "ok": completed.returncode == 0,
+            "output": (completed.stdout or "")[-12000:],
+        }
+    except Exception as exc:
+        return {
+            "command": cmd,
+            "ok": False,
+            "error": str(exc),
+            "error_type": exc.__class__.__name__,
+        }
+
+
+def build_audio_separator_discovery() -> dict:
+    model_dir = Path(os.getenv("LITELABS_AUDIO_SEPARATOR_MODEL_DIR", "/models/audio_separator"))
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    commands = [
+        ["audio-separator", "--help"],
+        ["audio-separator", "--list_models"],
+        ["audio-separator", "--list-models"],
+        ["audio-separator", "--list-models", "--model_file_dir", str(model_dir)],
+        ["python", "-m", "audio_separator", "--help"],
+    ]
+
+    outputs = [run_discovery_command(command) for command in commands]
+    files = []
+    try:
+        files = sorted(str(path.relative_to(model_dir)) for path in model_dir.rglob("*") if path.is_file())[:250]
+    except Exception as exc:
+        files = [f"error listing model dir: {exc}"]
+
+    env = {
+        "LITELABS_AUDIO_SEPARATOR_MODEL_DIR": str(model_dir),
+        "STEMFORGE_MODEL_DIR": os.getenv("STEMFORGE_MODEL_DIR", ""),
+    }
+
+    return {
+        "ok": True,
+        "mode": "audio_separator_discovery",
+        "env": env,
+        "model_dir_files": files,
+        "commands": outputs,
+        "note": "Use successful command output to choose exact audio_separator:<model_filename> values. Some list commands may fail depending on audio-separator version.",
+    }
+
+
 def handler(job: dict) -> dict:
     print("LiteLABS research job received", flush=True)
     payload = job.get("input") or {}
@@ -69,7 +129,7 @@ def handler(job: dict) -> dict:
             "ok": True,
             "status": "ready",
             "service": "litelabs-research-worker",
-            "modes": ["system_info", "master_pack", "model_bakeoff", "vocal_residual_test"],
+            "modes": ["system_info", "master_pack", "model_bakeoff", "vocal_residual_test", "audio_separator_discovery"],
         }
 
     mode = payload.get("mode") or "master_pack"
@@ -87,6 +147,9 @@ def handler(job: dict) -> dict:
             from research_tools import build_system_info
 
             return build_system_info()
+
+        if mode == "audio_separator_discovery":
+            return build_audio_separator_discovery()
 
         with tempfile.TemporaryDirectory(prefix="litelabs_research_") as temp_dir:
             temp_root = Path(temp_dir)
