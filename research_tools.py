@@ -323,10 +323,48 @@ def run_model_spec(input_path: Path, scratch_dir: Path, review_dir: Path, spec: 
 
 def stem_role(path: Path) -> str:
     lower = path.name.lower()
+
+    # audio-separator names often include the model name after the actual stem,
+    # for example: track_(other)_mel_band_roformer_vocals_becruily.flac.
+    # Read explicit parenthesised stem tokens before scanning the model name.
+    match = re.search(r"[_\s-]\((vocals?|instrumental|drums?|bass|guitar|piano|keys|other)\)", lower)
+    if match:
+        token = match.group(1)
+        if token.startswith("vocal"):
+            return "vocals"
+        if token == "instrumental":
+            return "instrumental"
+        if token.startswith("drum"):
+            return "drums"
+        if token == "bass":
+            return "bass"
+        if token == "guitar":
+            return "guitar"
+        if token in {"piano", "keys"}:
+            return "piano_keys"
+        if token == "other":
+            return "other"
+
+    # Use leading LiteLABS numeric prefixes before checking model names.
+    prefix_match = re.match(r"^\d+_[^_]+.*?_(vocals|drums|bass|guitar|piano|keys|instrumental|other|synth|strings)", lower)
+    if prefix_match:
+        token = prefix_match.group(1)
+        if token == "vocals":
+            return "vocals"
+        if token == "drums":
+            return "drums"
+        if token == "bass":
+            return "bass"
+        if token == "guitar":
+            return "guitar"
+        if token in {"piano", "keys"}:
+            return "piano_keys"
+        if token == "instrumental":
+            return "instrumental"
+        return "other"
+
     if "instrumental" in lower:
         return "instrumental"
-    if "vocal" in lower:
-        return "vocals"
     if "drum" in lower:
         return "drums"
     if "bass" in lower:
@@ -337,6 +375,8 @@ def stem_role(path: Path) -> str:
         return "piano_keys"
     if "other" in lower or "synth" in lower or "strings" in lower:
         return "other"
+    if "vocal" in lower:
+        return "vocals"
     return "unknown"
 
 
