@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
-ENV LITELABS_RESEARCH_BUILD=forensic-report-direct-1
+ENV LITELABS_RESEARCH_BUILD=audio-separator-diagnostics-1
 
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config libsamplerate0-dev && rm -rf /var/lib/apt/lists/*
 
@@ -15,5 +15,7 @@ RUN mkdir -p /models/audio_separator
 COPY handler.py /app/handler.py
 COPY research_tools.py /app/research_tools.py
 COPY research_bootstrap.py /app/research_bootstrap.py
+COPY litelabs_audio_separator_diagnostics_patch.py /app/litelabs_audio_separator_diagnostics_patch.py
+RUN python /app/litelabs_audio_separator_diagnostics_patch.py
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
