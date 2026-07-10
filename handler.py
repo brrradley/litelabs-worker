@@ -69,7 +69,7 @@ def handler(job: dict) -> dict:
             "ok": True,
             "status": "ready",
             "service": "litelabs-research-worker",
-            "modes": ["master_pack", "vocal_residual_test"],
+            "modes": ["system_info", "master_pack", "model_bakeoff", "vocal_residual_test"],
         }
 
     mode = payload.get("mode") or "master_pack"
@@ -83,10 +83,60 @@ def handler(job: dict) -> dict:
         post_progress(progress_url, progress_token, progress_job_id, message, percent)
 
     try:
+        if mode == "system_info":
+            from research_tools import build_system_info
+
+            return build_system_info()
+
         with tempfile.TemporaryDirectory(prefix="litelabs_research_") as temp_dir:
             temp_root = Path(temp_dir)
             output_root = temp_root / "output"
             output_root.mkdir(parents=True, exist_ok=True)
+
+            if mode == "model_bakeoff":
+                audio_url = payload.get("audio_url")
+                if not audio_url:
+                    return {"ok": False, "error": "Missing required input.audio_url"}
+
+                filename = payload.get("filename") or infer_filename(audio_url, "track.mp3")
+                input_path = temp_root / filename
+                output_format = str(payload.get("output_format") or "flac").lower().strip()
+                models = payload.get("models")
+
+                progress("Downloading research audio", 5)
+                download_file(audio_url, input_path)
+                progress("Research audio downloaded", 8)
+
+                from research_tools import build_model_bakeoff
+
+                result = build_model_bakeoff(
+                    input_path=input_path,
+                    output_root=output_root,
+                    filename=filename,
+                    models=models,
+                    output_format=output_format,
+                    progress=progress,
+                )
+                archive_path = Path(result["archive_path"])
+                archive_size = archive_path.stat().st_size
+
+                uploaded = False
+                if result_put_url:
+                    progress("Uploading research bake-off ZIP", 95)
+                    upload_file_put(result_put_url, archive_path)
+                    uploaded = True
+
+                progress("Research bake-off ready", 100)
+                return {
+                    "ok": True,
+                    "mode": mode,
+                    "track": result["track"],
+                    "archive_size_bytes": archive_size,
+                    "uploaded": uploaded,
+                    "result_url": result_public_url,
+                    "runs": result["runs"],
+                    "files": result["files"],
+                }
 
             if mode == "vocal_residual_test":
                 vocals_url = payload.get("vocals_url") or payload.get("audio_url")
