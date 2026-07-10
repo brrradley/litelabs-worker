@@ -15,7 +15,7 @@ RUN python -m pip install --upgrade pip setuptools wheel
 RUN python -m pip install audio-separator==0.44.2 onnxruntime-gpu==1.22.0
 RUN mkdir -p /models/audio_separator
 
-COPY litelabs_research_patch.py /app/litelabs_research_patch.py
-RUN python /app/litelabs_research_patch.py
+COPY handler.py /app/handler.py
+COPY research_tools.py /app/research_tools.py
 
 CMD ["python", "-u", "/app/handler.py"]
