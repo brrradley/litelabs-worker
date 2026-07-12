@@ -78,7 +78,7 @@ def build_audio_separator_discovery() -> dict:
 def handler(job: dict) -> dict:
     print("LiteLABS research job received", flush=True)
     payload = job.get("input") or {}
-    modes = ["system_info", "master_pack", "model_bakeoff", "benchmark_suite", "vocal_residual_test", "audio_separator_discovery"]
+    modes = ["system_info", "master_pack", "model_bakeoff", "benchmark_suite", "ground_truth_benchmark", "vocal_residual_test", "audio_separator_discovery"]
     if payload.get("healthcheck") is True:
         return {"ok": True, "status": "ready", "service": "litelabs-research-worker", "modes": modes}
 
@@ -103,6 +103,12 @@ def handler(job: dict) -> dict:
             progress("Starting no-export benchmark suite", 2)
             result = build_benchmark_suite(payload, progress=progress)
             progress("Benchmark batch complete", 100)
+            return result
+        if mode == "ground_truth_benchmark":
+            from ground_truth_benchmark import build_ground_truth_benchmark
+            progress("Starting ground-truth benchmark", 2)
+            result = build_ground_truth_benchmark(payload, progress=progress)
+            progress("Ground-truth benchmark complete", 100)
             return result
 
         with tempfile.TemporaryDirectory(prefix="litelabs_research_") as temp_dir:
