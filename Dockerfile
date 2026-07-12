@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
-ENV LITELABS_RESEARCH_BUILD=benchmark-suite-1
+ENV LITELABS_RESEARCH_BUILD=benchmark-suite-2
 
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config libsamplerate0-dev && rm -rf /var/lib/apt/lists/*
 
@@ -18,5 +18,6 @@ COPY benchmark_suite.py /app/benchmark_suite.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 COPY litelabs_audio_separator_diagnostics_patch.py /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_audio_separator_diagnostics_patch.py
+RUN test -f /app/benchmark_suite.py && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite; print('benchmark_suite import ok')"
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
