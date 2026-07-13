@@ -61,9 +61,6 @@ def build_audio_separator_discovery() -> dict:
     commands = [
         ["audio-separator", "--help"],
         ["audio-separator", "--list_models"],
-        ["audio-separator", "--list-models"],
-        ["audio-separator", "--list-models", "--model_file_dir", str(model_dir)],
-        ["python", "-m", "audio_separator", "--help"],
     ]
     files = sorted(str(path.relative_to(model_dir)) for path in model_dir.rglob("*") if path.is_file())[:250]
     return {
@@ -91,14 +88,23 @@ def load_ground_truth_builder():
 def handler(job: dict) -> dict:
     print("LiteLABS research job received", flush=True)
     payload = job.get("input") or {}
-    modes = ["system_info", "master_pack", "model_bakeoff", "benchmark_suite", "ground_truth_benchmark", "vocal_residual_test", "audio_separator_discovery"]
+    modes = [
+        "system_info", "master_pack", "model_bakeoff", "benchmark_suite",
+        "ground_truth_benchmark", "model_ground_truth_bakeoff",
+        "vocal_residual_test", "audio_separator_discovery",
+    ]
     if payload.get("healthcheck") is True:
-        module_status = {"ground_truth_benchmark": False}
+        module_status = {"ground_truth_benchmark": False, "model_ground_truth_bakeoff": False}
         try:
             load_ground_truth_builder()
             module_status["ground_truth_benchmark"] = True
         except Exception as exc:
             module_status["ground_truth_benchmark_error"] = str(exc)
+        try:
+            from model_ground_truth_bakeoff import build_model_ground_truth_bakeoff  # noqa: F401
+            module_status["model_ground_truth_bakeoff"] = True
+        except Exception as exc:
+            module_status["model_ground_truth_bakeoff_error"] = str(exc)
         return {"ok": True, "status": "ready", "service": "litelabs-research-worker", "modes": modes, "module_status": module_status}
 
     mode = payload.get("mode") or "master_pack"
@@ -128,6 +134,12 @@ def handler(job: dict) -> dict:
             progress("Starting ground-truth benchmark", 2)
             result = build_ground_truth_benchmark(payload, progress=progress)
             progress("Ground-truth benchmark complete", 100)
+            return result
+        if mode == "model_ground_truth_bakeoff":
+            from model_ground_truth_bakeoff import build_model_ground_truth_bakeoff
+            progress("Starting model ground-truth bakeoff", 2)
+            result = build_model_ground_truth_bakeoff(payload, progress=progress)
+            progress("Model ground-truth bakeoff complete", 100)
             return result
 
         with tempfile.TemporaryDirectory(prefix="litelabs_research_") as temp_dir:
