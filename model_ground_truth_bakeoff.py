@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -20,6 +21,8 @@ DEFAULT_MODELS = [
     "MelBandRoformerBigSYHFTV1.ckpt",
     "mel_band_roformer_vocals_becruily.ckpt",
 ]
+
+AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".m4a"}
 
 
 def _download(url: str, destination: Path) -> None:
@@ -82,15 +85,19 @@ def _run_with_gpu_monitor(cmd: list[str], timeout: int) -> tuple[int, str, float
 
 
 def _find_vocals(output_dir: Path) -> Path | None:
-    tokens = ("(vocals)", "_vocals", " vocals")
-    files = sorted(
-        path
-        for path in output_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".wav", ".flac", ".mp3", ".m4a"}
-    )
+    files = sorted(path for path in output_dir.rglob("*") if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS)
+
+    # audio-separator encodes the actual stem in parentheses. Match that first so
+    # model names containing words such as "vocals" cannot cause a false match.
+    for path in files:
+        match = re.search(r"\(([^)]+)\)", path.name.lower())
+        if match and match.group(1).strip() in {"vocal", "vocals"}:
+            return path
+
+    # Fallback for exporters that do not use parenthesised stem names.
     for path in files:
         lower = path.name.lower()
-        if any(token in lower for token in tokens):
+        if re.search(r"(?:^|[_\s-])vocals?(?:[_\s.-]|$)", lower):
             return path
     return None
 
@@ -98,12 +105,9 @@ def _find_vocals(output_dir: Path) -> Path | None:
 def _normalise_models(models: object) -> list[str]:
     if not isinstance(models, list) or not models:
         return list(DEFAULT_MODELS)
-    result = []
+    result: list[str] = []
     for item in models:
-        if isinstance(item, dict):
-            value = item.get("model") or item.get("model_filename") or item.get("name")
-        else:
-            value = item
+        value = item.get("model") or item.get("model_filename") or item.get("name") if isinstance(item, dict) else item
         if value:
             result.append(str(value))
     return result or list(DEFAULT_MODELS)
@@ -154,23 +158,16 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
             output_dir.mkdir(parents=True, exist_ok=True)
             if progress:
                 progress(f"Running {model}", int(8 + 78 * index / max(1, len(models))))
+
             cmd = [
-                "audio-separator",
-                str(source),
-                "--model_filename",
-                model,
-                "--model_file_dir",
-                str(model_dir),
-                "--output_dir",
-                str(output_dir),
-                "--output_format",
-                "FLAC",
-                "--mdxc_segment_size",
-                str(segment_size),
-                "--mdxc_overlap",
-                str(overlap),
-                "--mdxc_batch_size",
-                str(batch_size),
+                "audio-separator", str(source),
+                "--model_filename", model,
+                "--model_file_dir", str(model_dir),
+                "--output_dir", str(output_dir),
+                "--output_format", "FLAC",
+                "--mdxc_segment_size", str(segment_size),
+                "--mdxc_overlap", str(overlap),
+                "--mdxc_batch_size", str(batch_size),
             ]
             if use_autocast:
                 cmd.append("--use_autocast")
@@ -178,14 +175,12 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
             row = {"model": model, "ok": False, "command": cmd}
             try:
                 returncode, output, runtime, peak_vram = _run_with_gpu_monitor(cmd, timeout_seconds)
-                row.update(
-                    {
-                        "runtime_seconds": round(runtime, 3),
-                        "peak_gpu_memory_mib": peak_vram,
-                        "returncode": returncode,
-                        "log_tail": output[-6000:],
-                    }
-                )
+                row.update({
+                    "runtime_seconds": round(runtime, 3),
+                    "peak_gpu_memory_mib": peak_vram,
+                    "returncode": returncode,
+                    "log_tail": output[-6000:],
+                })
                 if returncode != 0:
                     raise RuntimeError(f"audio-separator exited with code {returncode}")
 
@@ -213,17 +208,15 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
                     "vocals": _score(vocals_reference, vocals_estimate, vocals_rate),
                     "instrumental": _score(instrumental_reference, instrumental_estimate, source_rate),
                 }
-                row.update(
-                    {
-                        "ok": True,
-                        "scores": scores,
-                        "generated_files": {
-                            "vocals": generated_vocals.name,
-                            "instrumental": "derived: source mix minus generated vocals",
-                        },
-                        "instrumental_derivation": "source_minus_vocals",
-                    }
-                )
+                row.update({
+                    "ok": True,
+                    "scores": scores,
+                    "generated_files": {
+                        "vocals": generated_vocals.name,
+                        "instrumental": "derived: source mix minus generated vocals",
+                    },
+                    "instrumental_derivation": "source_minus_vocals",
+                })
             except Exception as exc:
                 row.update({"error": str(exc), "error_type": exc.__class__.__name__})
             rows.append(row)
@@ -242,16 +235,13 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
                 leaderboard.append(entry)
         leaderboards[stem] = sorted(
             leaderboard,
-            key=lambda item: (
-                -float(item.get("quality_score") or 0),
-                -float(item.get("si_sdr_db") or -999),
-            ),
+            key=lambda item: (-float(item.get("quality_score") or 0), -float(item.get("si_sdr_db") or -999)),
         )
 
     return {
         "ok": True,
         "mode": "model_ground_truth_bakeoff",
-        "schema_version": 2,
+        "schema_version": 3,
         "models_requested": models,
         "runs": rows,
         "leaderboards": leaderboards,
