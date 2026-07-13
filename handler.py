@@ -47,28 +47,47 @@ def infer_filename(url: str, fallback: str) -> str:
     return Path(urlparse(url).path).name or fallback
 
 
-def run_discovery_command(cmd: list[str], timeout: int = 90) -> dict:
+def run_discovery_command(cmd: list[str], timeout: int = 90, output_limit: int = 12000) -> dict:
     try:
         completed = subprocess.run(cmd, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
-        return {"command": cmd, "returncode": completed.returncode, "ok": completed.returncode == 0, "output": (completed.stdout or "")[-12000:]}
+        output = completed.stdout or ""
+        if output_limit > 0 and len(output) > output_limit:
+            output = output[-output_limit:]
+        return {"command": cmd, "returncode": completed.returncode, "ok": completed.returncode == 0, "output": output}
     except Exception as exc:
         return {"command": cmd, "ok": False, "error": str(exc), "error_type": exc.__class__.__name__}
 
 
-def build_audio_separator_discovery() -> dict:
+def build_audio_separator_discovery(payload: dict | None = None) -> dict:
+    payload = payload or {}
     model_dir = Path(os.getenv("LITELABS_AUDIO_SEPARATOR_MODEL_DIR", "/models/audio_separator"))
     model_dir.mkdir(parents=True, exist_ok=True)
-    commands = [
-        ["audio-separator", "--help"],
-        ["audio-separator", "--list_models"],
-    ]
+
+    list_filter = str(payload.get("list_filter") or payload.get("stem") or "").strip().lower()
+    list_limit = max(1, min(250, int(payload.get("list_limit") or 100)))
+    list_format = str(payload.get("list_format") or "pretty").strip().lower()
+    if list_format not in {"pretty", "json"}:
+        list_format = "pretty"
+
+    list_command = ["audio-separator", "--list_models", "--list_limit", str(list_limit), "--list_format", list_format]
+    if list_filter:
+        list_command.extend(["--list_filter", list_filter])
+
+    commands = []
+    if bool(payload.get("include_help", False)):
+        commands.append(run_discovery_command(["audio-separator", "--help"], output_limit=20000))
+    commands.append(run_discovery_command(list_command, output_limit=100000))
+
     files = sorted(str(path.relative_to(model_dir)) for path in model_dir.rglob("*") if path.is_file())[:250]
     return {
         "ok": True,
         "mode": "audio_separator_discovery",
+        "list_filter": list_filter or None,
+        "list_limit": list_limit,
+        "list_format": list_format,
         "env": {"LITELABS_AUDIO_SEPARATOR_MODEL_DIR": str(model_dir), "STEMFORGE_MODEL_DIR": os.getenv("STEMFORGE_MODEL_DIR", "")},
         "model_dir_files": files,
-        "commands": [run_discovery_command(command) for command in commands],
+        "commands": commands,
     }
 
 
@@ -122,7 +141,7 @@ def handler(job: dict) -> dict:
             from research_tools import build_system_info
             return build_system_info()
         if mode == "audio_separator_discovery":
-            return build_audio_separator_discovery()
+            return build_audio_separator_discovery(payload)
         if mode == "benchmark_suite":
             from benchmark_suite import build_benchmark_suite
             progress("Starting no-export benchmark suite", 2)
