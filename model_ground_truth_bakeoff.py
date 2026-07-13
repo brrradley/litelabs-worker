@@ -14,15 +14,9 @@ import requests
 from ground_truth_benchmark import _load, _normalise_audio, _score
 
 
-DEFAULT_MODELS = [
-    "BS-Roformer-SW.ckpt",
-    "melband_roformer_big_beta4.ckpt",
-    "melband_roformer_big_beta5e.ckpt",
-    "MelBandRoformerBigSYHFTV1.ckpt",
-    "mel_band_roformer_vocals_becruily.ckpt",
-]
-
+DEFAULT_MODELS = ["BS-Roformer-SW.ckpt"]
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".m4a"}
+SUPPORTED_STEMS = {"vocals", "instrumental", "bass", "drums", "guitar", "piano", "other"}
 
 
 def _download(url: str, destination: Path) -> None:
@@ -84,22 +78,27 @@ def _run_with_gpu_monitor(cmd: list[str], timeout: int) -> tuple[int, str, float
         thread.join(timeout=2)
 
 
-def _find_vocals(output_dir: Path) -> Path | None:
+def _stem_aliases(stem: str) -> set[str]:
+    aliases = {stem}
+    if stem == "vocals":
+        aliases.add("vocal")
+    elif stem == "drums":
+        aliases.add("drum")
+    return aliases
+
+
+def _find_stem(output_dir: Path, stem: str) -> Path | None:
+    aliases = _stem_aliases(stem)
     files = sorted(path for path in output_dir.rglob("*") if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS)
 
-    # Source titles may themselves contain parentheses, for example "(EDIT)".
-    # Inspect every parenthesised token and only accept an explicit vocal stem.
     for path in files:
-        tokens = {token.strip().lower() for token in re.findall(r"\(([^)]+)\)", path.name)}
-        if tokens & {"vocal", "vocals"}:
+        tokens = [token.strip() for token in re.findall(r"\(([^)]+)\)", path.name.lower())]
+        if any(token in aliases for token in tokens):
             return path
 
-    # Conservative fallback for exporters without parenthesised stem labels.
-    # Strip the extension and require a standalone trailing stem token, avoiding
-    # matches caused by model names such as "roformer_vocals_fv6".
     for path in files:
-        stem = path.stem.lower()
-        if re.search(r"(?:^|[\s_-])vocals?$", stem):
+        lower = path.name.lower()
+        if any(re.search(rf"(?:^|[_\s-]){re.escape(alias)}(?:[_\s.-]|$)", lower) for alias in aliases):
             return path
     return None
 
@@ -117,15 +116,21 @@ def _normalise_models(models: object) -> list[str]:
 
 def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
     audio_url = str(payload.get("audio_url") or "").strip()
+    target_stem = str(payload.get("target_stem") or "vocals").strip().lower()
     references = payload.get("references") or {}
+
     if not audio_url:
         return {"ok": False, "mode": "model_ground_truth_bakeoff", "error": "audio_url is required"}
-    if not references.get("vocals") or not references.get("instrumental"):
-        return {
-            "ok": False,
-            "mode": "model_ground_truth_bakeoff",
-            "error": "references.vocals and references.instrumental are required",
-        }
+    if target_stem not in SUPPORTED_STEMS:
+        return {"ok": False, "mode": "model_ground_truth_bakeoff", "error": f"Unsupported target_stem: {target_stem}"}
+    if not references.get(target_stem):
+        return {"ok": False, "mode": "model_ground_truth_bakeoff", "error": f"references.{target_stem} is required"}
+
+    residual_stem = str(payload.get("residual_stem") or "").strip().lower()
+    if target_stem == "vocals" and not residual_stem and references.get("instrumental"):
+        residual_stem = "instrumental"
+    if residual_stem and not references.get(residual_stem):
+        return {"ok": False, "mode": "model_ground_truth_bakeoff", "error": f"references.{residual_stem} is required when residual_stem is set"}
 
     models = _normalise_models(payload.get("models"))
     timeout_seconds = max(300, min(3300, int(payload.get("model_timeout_seconds") or 1800)))
@@ -147,8 +152,9 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
         _normalise_audio(source, source_wav)
         source_audio, source_rate = _load(source_wav)
 
-        reference_audio = {}
-        for stem in ("vocals", "instrumental"):
+        reference_audio: dict[str, tuple] = {}
+        stems_to_download = [target_stem] + ([residual_stem] if residual_stem else [])
+        for stem in stems_to_download:
             raw = root / "references" / _filename_from_url(str(references[stem]), f"{stem}.wav")
             wav = root / "references_wav" / f"{stem}.wav"
             _download(str(references[stem]), raw)
@@ -167,6 +173,7 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
                 "--model_file_dir", str(model_dir),
                 "--output_dir", str(output_dir),
                 "--output_format", "FLAC",
+                "--single_stem", target_stem.capitalize(),
                 "--mdxc_segment_size", str(segment_size),
                 "--mdxc_overlap", str(overlap),
                 "--mdxc_batch_size", str(batch_size),
@@ -174,7 +181,7 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
             if use_autocast:
                 cmd.append("--use_autocast")
 
-            row = {"model": model, "ok": False, "command": cmd}
+            row = {"model": model, "ok": False, "command": cmd, "target_stem": target_stem}
             try:
                 returncode, output, runtime, peak_vram = _run_with_gpu_monitor(cmd, timeout_seconds)
                 row.update({
@@ -186,46 +193,37 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
                 if returncode != 0:
                     raise RuntimeError(f"audio-separator exited with code {returncode}")
 
-                generated_vocals = _find_vocals(output_dir)
-                if generated_vocals is None:
-                    raise FileNotFoundError("Could not identify generated vocals file")
+                generated = _find_stem(output_dir, target_stem)
+                if generated is None:
+                    raise FileNotFoundError(f"Could not identify generated {target_stem} file")
 
-                vocals_wav = root / "normalised" / f"{index:02d}_vocals.wav"
-                _normalise_audio(generated_vocals, vocals_wav)
-                vocals_estimate, vocals_rate = _load(vocals_wav)
-                if vocals_rate != source_rate:
-                    raise ValueError("Source/vocal sample-rate mismatch after normalisation")
+                estimate_wav = root / "normalised" / f"{index:02d}_{target_stem}.wav"
+                _normalise_audio(generated, estimate_wav)
+                estimate, rate = _load(estimate_wav)
+                reference, ref_rate = reference_audio[target_stem]
+                if rate != ref_rate or rate != source_rate:
+                    raise ValueError("Sample-rate mismatch after normalisation")
 
-                vocals_reference, vocals_ref_rate = reference_audio["vocals"]
-                instrumental_reference, instrumental_ref_rate = reference_audio["instrumental"]
-                if vocals_rate != vocals_ref_rate or source_rate != instrumental_ref_rate:
-                    raise ValueError("Reference sample-rate mismatch after normalisation")
+                scores = {target_stem: _score(reference, estimate, rate)}
+                generated_files = {target_stem: generated.name}
+                if residual_stem:
+                    residual_reference, residual_rate = reference_audio[residual_stem]
+                    if residual_rate != source_rate:
+                        raise ValueError("Residual reference sample-rate mismatch")
+                    length = min(len(source_audio), len(estimate))
+                    residual_estimate = source_audio[:length] - estimate[:length]
+                    scores[residual_stem] = _score(residual_reference, residual_estimate, source_rate)
+                    generated_files[residual_stem] = f"derived: source mix minus generated {target_stem}"
 
-                length = min(len(source_audio), len(vocals_estimate))
-                if length < source_rate:
-                    raise ValueError("Generated vocals are too short to derive an instrumental")
-                instrumental_estimate = source_audio[:length] - vocals_estimate[:length]
-
-                scores = {
-                    "vocals": _score(vocals_reference, vocals_estimate, vocals_rate),
-                    "instrumental": _score(instrumental_reference, instrumental_estimate, source_rate),
-                }
-                row.update({
-                    "ok": True,
-                    "scores": scores,
-                    "generated_files": {
-                        "vocals": generated_vocals.name,
-                        "instrumental": "derived: source mix minus generated vocals",
-                    },
-                    "instrumental_derivation": "source_minus_vocals",
-                })
+                row.update({"ok": True, "scores": scores, "generated_files": generated_files})
             except Exception as exc:
                 row.update({"error": str(exc), "error_type": exc.__class__.__name__})
             rows.append(row)
 
+    leaderboard_stems = [target_stem] + ([residual_stem] if residual_stem else [])
     leaderboards = {}
-    for stem in ("vocals", "instrumental"):
-        leaderboard = []
+    for stem in leaderboard_stems:
+        entries = []
         for row in rows:
             if row.get("ok") and stem in (row.get("scores") or {}):
                 entry = {
@@ -234,16 +232,15 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
                     "peak_gpu_memory_mib": row.get("peak_gpu_memory_mib"),
                 }
                 entry.update(row["scores"][stem])
-                leaderboard.append(entry)
-        leaderboards[stem] = sorted(
-            leaderboard,
-            key=lambda item: (-float(item.get("quality_score") or 0), -float(item.get("si_sdr_db") or -999)),
-        )
+                entries.append(entry)
+        leaderboards[stem] = sorted(entries, key=lambda item: (-float(item.get("quality_score") or 0), -float(item.get("si_sdr_db") or -999)))
 
     return {
         "ok": True,
         "mode": "model_ground_truth_bakeoff",
-        "schema_version": 4,
+        "schema_version": 5,
+        "target_stem": target_stem,
+        "residual_stem": residual_stem or None,
         "models_requested": models,
         "runs": rows,
         "leaderboards": leaderboards,
@@ -255,5 +252,5 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
             "use_autocast": use_autocast,
         },
         "no_audio_exported": True,
-        "metric_note": "Generated vocals are scored directly. Instrumentals are derived as source mix minus generated vocals, then both are timing-, polarity- and gain-aligned to genuine references before scoring.",
+        "metric_note": f"Generated {target_stem} is scored directly against its genuine reference." + (f" {residual_stem} is derived as source mix minus generated {target_stem}." if residual_stem else ""),
     }
