@@ -87,17 +87,19 @@ def _run_with_gpu_monitor(cmd: list[str], timeout: int) -> tuple[int, str, float
 def _find_vocals(output_dir: Path) -> Path | None:
     files = sorted(path for path in output_dir.rglob("*") if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS)
 
-    # audio-separator encodes the actual stem in parentheses. Match that first so
-    # model names containing words such as "vocals" cannot cause a false match.
+    # Source titles may themselves contain parentheses, for example "(EDIT)".
+    # Inspect every parenthesised token and only accept an explicit vocal stem.
     for path in files:
-        match = re.search(r"\(([^)]+)\)", path.name.lower())
-        if match and match.group(1).strip() in {"vocal", "vocals"}:
+        tokens = {token.strip().lower() for token in re.findall(r"\(([^)]+)\)", path.name)}
+        if tokens & {"vocal", "vocals"}:
             return path
 
-    # Fallback for exporters that do not use parenthesised stem names.
+    # Conservative fallback for exporters without parenthesised stem labels.
+    # Strip the extension and require a standalone trailing stem token, avoiding
+    # matches caused by model names such as "roformer_vocals_fv6".
     for path in files:
-        lower = path.name.lower()
-        if re.search(r"(?:^|[_\s-])vocals?(?:[_\s.-]|$)", lower):
+        stem = path.stem.lower()
+        if re.search(r"(?:^|[\s_-])vocals?$", stem):
             return path
     return None
 
@@ -241,7 +243,7 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
     return {
         "ok": True,
         "mode": "model_ground_truth_bakeoff",
-        "schema_version": 3,
+        "schema_version": 4,
         "models_requested": models,
         "runs": rows,
         "leaderboards": leaderboards,
