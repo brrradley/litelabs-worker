@@ -75,12 +75,31 @@ def build_audio_separator_discovery() -> dict:
     }
 
 
+def load_ground_truth_builder():
+    try:
+        from ground_truth_benchmark import build_ground_truth_benchmark
+        return build_ground_truth_benchmark
+    except ModuleNotFoundError:
+        fallback_url = "https://raw.githubusercontent.com/brrradley/litelabs-worker/research/ground_truth_benchmark.py"
+        response = requests.get(fallback_url, timeout=60)
+        response.raise_for_status()
+        namespace = {"__name__": "ground_truth_benchmark_runtime", "__file__": fallback_url}
+        exec(compile(response.text, fallback_url, "exec"), namespace)
+        return namespace["build_ground_truth_benchmark"]
+
+
 def handler(job: dict) -> dict:
     print("LiteLABS research job received", flush=True)
     payload = job.get("input") or {}
     modes = ["system_info", "master_pack", "model_bakeoff", "benchmark_suite", "ground_truth_benchmark", "vocal_residual_test", "audio_separator_discovery"]
     if payload.get("healthcheck") is True:
-        return {"ok": True, "status": "ready", "service": "litelabs-research-worker", "modes": modes}
+        module_status = {"ground_truth_benchmark": False}
+        try:
+            load_ground_truth_builder()
+            module_status["ground_truth_benchmark"] = True
+        except Exception as exc:
+            module_status["ground_truth_benchmark_error"] = str(exc)
+        return {"ok": True, "status": "ready", "service": "litelabs-research-worker", "modes": modes, "module_status": module_status}
 
     mode = payload.get("mode") or "master_pack"
     progress_url = payload.get("progress_url")
@@ -105,7 +124,7 @@ def handler(job: dict) -> dict:
             progress("Benchmark batch complete", 100)
             return result
         if mode == "ground_truth_benchmark":
-            from ground_truth_benchmark import build_ground_truth_benchmark
+            build_ground_truth_benchmark = load_ground_truth_builder()
             progress("Starting ground-truth benchmark", 2)
             result = build_ground_truth_benchmark(payload, progress=progress)
             progress("Ground-truth benchmark complete", 100)
