@@ -62,22 +62,18 @@ def build_audio_separator_discovery(payload: dict | None = None) -> dict:
     payload = payload or {}
     model_dir = Path(os.getenv("LITELABS_AUDIO_SEPARATOR_MODEL_DIR", "/models/audio_separator"))
     model_dir.mkdir(parents=True, exist_ok=True)
-
     list_filter = str(payload.get("list_filter") or payload.get("stem") or "").strip().lower()
     list_limit = max(1, min(250, int(payload.get("list_limit") or 100)))
     list_format = str(payload.get("list_format") or "pretty").strip().lower()
     if list_format not in {"pretty", "json"}:
         list_format = "pretty"
-
     list_command = ["audio-separator", "--list_models", "--list_limit", str(list_limit), "--list_format", list_format]
     if list_filter:
         list_command.extend(["--list_filter", list_filter])
-
     commands = []
     if bool(payload.get("include_help", False)):
         commands.append(run_discovery_command(["audio-separator", "--help"], output_limit=20000))
     commands.append(run_discovery_command(list_command, output_limit=100000))
-
     files = sorted(str(path.relative_to(model_dir)) for path in model_dir.rglob("*") if path.is_file())[:250]
     return {
         "ok": True,
@@ -109,11 +105,11 @@ def handler(job: dict) -> dict:
     payload = job.get("input") or {}
     modes = [
         "system_info", "master_pack", "model_bakeoff", "benchmark_suite",
-        "ground_truth_benchmark", "model_ground_truth_bakeoff",
+        "ground_truth_benchmark", "model_ground_truth_bakeoff", "cascade_ground_truth_bakeoff",
         "vocal_residual_test", "audio_separator_discovery",
     ]
     if payload.get("healthcheck") is True:
-        module_status = {"ground_truth_benchmark": False, "model_ground_truth_bakeoff": False}
+        module_status = {"ground_truth_benchmark": False, "model_ground_truth_bakeoff": False, "cascade_ground_truth_bakeoff": False}
         try:
             load_ground_truth_builder()
             module_status["ground_truth_benchmark"] = True
@@ -124,6 +120,11 @@ def handler(job: dict) -> dict:
             module_status["model_ground_truth_bakeoff"] = True
         except Exception as exc:
             module_status["model_ground_truth_bakeoff_error"] = str(exc)
+        try:
+            from cascade_ground_truth_bakeoff import build_cascade_ground_truth_bakeoff  # noqa: F401
+            module_status["cascade_ground_truth_bakeoff"] = True
+        except Exception as exc:
+            module_status["cascade_ground_truth_bakeoff_error"] = str(exc)
         return {"ok": True, "status": "ready", "service": "litelabs-research-worker", "modes": modes, "module_status": module_status}
 
     mode = payload.get("mode") or "master_pack"
@@ -160,12 +161,17 @@ def handler(job: dict) -> dict:
             result = build_model_ground_truth_bakeoff(payload, progress=progress)
             progress("Model ground-truth bakeoff complete", 100)
             return result
+        if mode == "cascade_ground_truth_bakeoff":
+            from cascade_ground_truth_bakeoff import build_cascade_ground_truth_bakeoff
+            progress("Starting vocal-first cascade comparison", 2)
+            result = build_cascade_ground_truth_bakeoff(payload, progress=progress)
+            progress("Cascade comparison complete", 100)
+            return result
 
         with tempfile.TemporaryDirectory(prefix="litelabs_research_") as temp_dir:
             temp_root = Path(temp_dir)
             output_root = temp_root / "output"
             output_root.mkdir(parents=True, exist_ok=True)
-
             if mode == "model_bakeoff":
                 audio_url = payload.get("audio_url")
                 if not audio_url:
@@ -183,7 +189,6 @@ def handler(job: dict) -> dict:
                     upload_file_put(result_put_url, archive_path)
                     uploaded = True
                 return {"ok": True, "mode": mode, "track": result["track"], "archive_size_bytes": archive_path.stat().st_size, "uploaded": uploaded, "result_url": result_public_url, "runs": result["runs"], "files": result["files"]}
-
             if mode == "vocal_residual_test":
                 vocals_url = payload.get("vocals_url") or payload.get("audio_url")
                 lead_url = payload.get("lead_vocals_url") or payload.get("lead_url")
@@ -202,7 +207,6 @@ def handler(job: dict) -> dict:
                     upload_file_put(result_put_url, archive_path)
                     uploaded = True
                 return {"ok": True, "mode": mode, "track": result["track"], "archive_size_bytes": archive_path.stat().st_size, "uploaded": uploaded, "result_url": result_public_url, "files": result["files"]}
-
             if mode != "master_pack":
                 return {"ok": False, "error": f"Unknown research mode: {mode}"}
             audio_url = payload.get("audio_url")
