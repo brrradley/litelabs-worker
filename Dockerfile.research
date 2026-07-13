@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
-ENV LITELABS_RESEARCH_BUILD=ground-truth-benchmark-1
+ENV LITELABS_RESEARCH_BUILD=ground-truth-benchmark-2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -21,6 +21,8 @@ COPY research_tools.py /app/research_tools.py
 COPY benchmark_suite.py /app/benchmark_suite.py
 COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
 
-RUN python -c "import benchmark_suite, ground_truth_benchmark; print('research benchmark modules import successfully')"
+RUN test -f /app/benchmark_suite.py \
+    && test -f /app/ground_truth_benchmark.py \
+    && python -c "import benchmark_suite, ground_truth_benchmark; print('research benchmark modules import successfully')"
 
 CMD ["python", "-u", "/app/handler.py"]
