@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
-import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -23,6 +23,7 @@ def _download(url: str, destination: Path) -> None:
 
 
 def _normalise_audio(source: Path, destination: Path, sample_rate: int = 44100) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run([
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(source), "-ar", str(sample_rate), "-ac", "2",
@@ -65,8 +66,7 @@ def _best_offset(reference: np.ndarray, estimate: np.ndarray, sample_rate: int, 
             a, b = ref_env, est_env
         if len(a) < 8:
             continue
-        denominator = float(np.linalg.norm(a) * np.linalg.norm(b)) + 1e-12
-        score = float(np.dot(a, b) / denominator)
+        score = float(np.dot(a, b) / (float(np.linalg.norm(a) * np.linalg.norm(b)) + 1e-12))
         if score > best_score:
             best_score = score
             best_lag = lag
@@ -95,10 +95,8 @@ def _score(reference: np.ndarray, estimate: np.ndarray, sample_rate: int) -> dic
     ref = reference.reshape(-1).astype(np.float64)
     est = estimate.reshape(-1).astype(np.float64)
     ref_energy = float(np.dot(ref, ref)) + 1e-12
-
     gain = float(np.dot(est, ref) / ref_energy)
     polarity_flipped = gain < 0
-    gain = abs(gain)
     if polarity_flipped:
         est = -est
     gain = float(np.dot(est, ref) / ref_energy)
@@ -118,13 +116,11 @@ def _score(reference: np.ndarray, estimate: np.ndarray, sample_rate: int) -> dic
     ref_fft = np.abs(np.fft.rfft(ref[:segment]))
     est_fft = np.abs(np.fft.rfft(gain_matched[:segment]))
     spectral_similarity = float(np.dot(ref_fft, est_fft) / ((np.linalg.norm(ref_fft) * np.linalg.norm(est_fft)) + 1e-12))
-
     quality_score = max(0.0, min(100.0,
         45.0 * max(0.0, min(1.0, correlation))
         + 25.0 * max(0.0, min(1.0, spectral_similarity))
         + 30.0 * max(0.0, min(1.0, (si_sdr + 10.0) / 30.0))
     ))
-
     return {
         "quality_score": round(quality_score, 2),
         "si_sdr_db": round(si_sdr, 3),
@@ -144,77 +140,120 @@ def _url(base_url: str, relative_path: str) -> str:
     return base_url.rstrip("/") + "/" + quote(relative_path.lstrip("/"), safe="/")
 
 
+def _rank(rows: list[dict]) -> dict[str, list[dict]]:
+    stems = sorted({str(row.get("stem")) for row in rows if row.get("stem")})
+    return {
+        stem: sorted(
+            [row for row in rows if row.get("ok") and row.get("stem") == stem],
+            key=lambda row: (-float(row.get("quality_score") or 0.0), -float(row.get("si_sdr_db") or -999.0)),
+        )
+        for stem in stems
+    }
+
+
 def build_ground_truth_benchmark(payload: dict, progress=None) -> dict:
     base_url = str(payload.get("base_url") or "").strip()
     tests = payload.get("tests") or []
     if not base_url or not isinstance(tests, list) or not tests:
         return {"ok": False, "mode": "ground_truth_benchmark", "error": "base_url and tests[] are required"}
 
-    results: list[dict] = []
+    pairs: list[tuple[int, int]] = []
+    for test_index, test in enumerate(tests):
+        for candidate_index, _candidate in enumerate(test.get("candidates") or []):
+            pairs.append((test_index, candidate_index))
+
+    cursor = max(0, int(payload.get("cursor") or 0))
+    max_pairs = max(1, int(payload.get("max_pairs") or 12))
+    time_budget_seconds = max(60, min(3300, int(payload.get("time_budget_seconds") or 900)))
+    end = min(len(pairs), cursor + max_pairs)
+    started = time.monotonic()
+    rows_by_test: dict[int, list[dict]] = {}
+
     with tempfile.TemporaryDirectory(prefix="litelabs_ground_truth_") as temp:
         root = Path(temp)
-        for test_index, test in enumerate(tests):
+        reference_cache: dict[tuple[int, str], tuple[np.ndarray, int]] = {}
+
+        for position in range(cursor, end):
+            if position > cursor and time.monotonic() - started >= time_budget_seconds:
+                end = position
+                break
+
+            test_index, candidate_index = pairs[position]
+            test = tests[test_index]
             test_id = str(test.get("id") or f"test-{test_index + 1}")
-            references = test.get("references") or {}
-            candidates = test.get("candidates") or []
-            if progress:
-                progress(f"Preparing ground-truth test {test_id}", 5)
+            candidate = (test.get("candidates") or [])[candidate_index]
+            model = str(candidate.get("model") or "unknown")
+            stem = str(candidate.get("stem") or "unknown")
+            path = str(candidate.get("path") or "")
+            row = {
+                "pair_index": position,
+                "test_index": test_index,
+                "candidate_index": candidate_index,
+                "model": model,
+                "stem": stem,
+                "path": path,
+                "ok": False,
+            }
 
-            reference_cache: dict[str, tuple[np.ndarray, int]] = {}
-            for stem, path in references.items():
-                raw = root / "raw" / test_id / "references" / f"{stem}_{Path(path).name}"
-                wav = root / "wav" / test_id / "references" / f"{stem}.wav"
-                wav.parent.mkdir(parents=True, exist_ok=True)
-                _download(_url(base_url, str(path)), raw)
+            try:
+                references = test.get("references") or {}
+                reference_path = references.get(stem)
+                if not reference_path:
+                    raise ValueError(f"No reference supplied for stem {stem}")
+
+                cache_key = (test_index, stem)
+                if cache_key not in reference_cache:
+                    if progress:
+                        progress(f"Downloading {test_id} {stem} reference", 5)
+                    raw_ref = root / "raw" / test_id / "references" / f"{stem}_{Path(str(reference_path)).name}"
+                    wav_ref = root / "wav" / test_id / "references" / f"{stem}.wav"
+                    _download(_url(base_url, str(reference_path)), raw_ref)
+                    _normalise_audio(raw_ref, wav_ref)
+                    reference_cache[cache_key] = _load(wav_ref)
+
+                raw = root / "raw" / test_id / "candidates" / f"{candidate_index:03d}_{Path(path).name}"
+                wav = root / "wav" / test_id / "candidates" / f"{candidate_index:03d}.wav"
+                _download(_url(base_url, path), raw)
                 _normalise_audio(raw, wav)
-                reference_cache[str(stem)] = _load(wav)
+                estimate, sample_rate = _load(wav)
+                reference, reference_rate = reference_cache[cache_key]
+                if sample_rate != reference_rate:
+                    raise ValueError("Unexpected sample-rate mismatch after normalisation")
+                row.update(_score(reference, estimate, sample_rate))
+                row["ok"] = True
+            except Exception as exc:
+                row["error"] = str(exc)
+                row["error_type"] = exc.__class__.__name__
 
-            test_rows: list[dict] = []
-            for candidate_index, candidate in enumerate(candidates):
-                model = str(candidate.get("model") or "unknown")
-                stem = str(candidate.get("stem") or "unknown")
-                path = str(candidate.get("path") or "")
-                row = {"model": model, "stem": stem, "path": path, "ok": False}
-                try:
-                    if stem not in reference_cache:
-                        raise ValueError(f"No reference supplied for stem {stem}")
-                    raw = root / "raw" / test_id / "candidates" / f"{candidate_index:03d}_{Path(path).name}"
-                    wav = root / "wav" / test_id / "candidates" / f"{candidate_index:03d}.wav"
-                    wav.parent.mkdir(parents=True, exist_ok=True)
-                    _download(_url(base_url, path), raw)
-                    _normalise_audio(raw, wav)
-                    estimate, sample_rate = _load(wav)
-                    reference, reference_rate = reference_cache[stem]
-                    if sample_rate != reference_rate:
-                        raise ValueError("Unexpected sample-rate mismatch after normalisation")
-                    row.update(_score(reference, estimate, sample_rate))
-                    row["ok"] = True
-                except Exception as exc:
-                    row["error"] = str(exc)
-                    row["error_type"] = exc.__class__.__name__
-                test_rows.append(row)
-                if progress:
-                    completed = candidate_index + 1
-                    progress(f"Scored {model} {stem} on {test_id}", int(10 + 85 * completed / max(1, len(candidates))))
+            rows_by_test.setdefault(test_index, []).append(row)
+            if progress:
+                completed = position - cursor + 1
+                progress(f"Scored {model} {stem} on {test_id}", int(10 + 85 * completed / max(1, end - cursor)))
 
-            leaderboards: dict[str, list[dict]] = {}
-            for stem in references:
-                ranked = [row for row in test_rows if row.get("ok") and row.get("stem") == stem]
-                leaderboards[stem] = sorted(ranked, key=lambda row: (-float(row.get("quality_score") or 0.0), -float(row.get("si_sdr_db") or -999.0)))
-            results.append({
-                "id": test_id,
-                "genre": test.get("genre"),
-                "traits": test.get("traits") or [],
-                "results": test_rows,
-                "leaderboards": leaderboards,
-            })
+    test_results = []
+    for test_index in sorted(rows_by_test):
+        test = tests[test_index]
+        rows = rows_by_test[test_index]
+        test_results.append({
+            "id": str(test.get("id") or f"test-{test_index + 1}"),
+            "genre": test.get("genre"),
+            "traits": test.get("traits") or [],
+            "results": rows,
+            "leaderboards": _rank(rows),
+        })
 
+    next_cursor = end if end < len(pairs) else None
     return {
         "ok": True,
         "mode": "ground_truth_benchmark",
-        "schema_version": 1,
-        "test_count": len(results),
-        "tests": results,
+        "schema_version": 2,
+        "cursor": cursor,
+        "processed_pairs": sum(len(rows) for rows in rows_by_test.values()),
+        "total_pairs": len(pairs),
+        "next_cursor": next_cursor,
+        "complete": next_cursor is None,
+        "test_count": len(test_results),
+        "tests": test_results,
         "no_audio_exported": True,
         "metric_note": "Candidates are timing-, polarity- and gain-aligned to genuine reference stems before SI-SDR, residual, correlation and spectral scoring.",
     }
