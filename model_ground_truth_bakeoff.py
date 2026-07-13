@@ -81,12 +81,13 @@ def _run_with_gpu_monitor(cmd: list[str], timeout: int) -> tuple[int, str, float
         thread.join(timeout=2)
 
 
-def _find_stem(output_dir: Path, stem: str) -> Path | None:
-    tokens = {
-        "vocals": ("(vocals)", "_vocals", " vocals"),
-        "instrumental": ("(instrumental)", "_instrumental", " instrumental"),
-    }[stem]
-    files = sorted(path for path in output_dir.rglob("*") if path.is_file() and path.suffix.lower() in {".wav", ".flac", ".mp3", ".m4a"})
+def _find_vocals(output_dir: Path) -> Path | None:
+    tokens = ("(vocals)", "_vocals", " vocals")
+    files = sorted(
+        path
+        for path in output_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in {".wav", ".flac", ".mp3", ".m4a"}
+    )
     for path in files:
         lower = path.name.lower()
         if any(token in lower for token in tokens):
@@ -114,7 +115,11 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
     if not audio_url:
         return {"ok": False, "mode": "model_ground_truth_bakeoff", "error": "audio_url is required"}
     if not references.get("vocals") or not references.get("instrumental"):
-        return {"ok": False, "mode": "model_ground_truth_bakeoff", "error": "references.vocals and references.instrumental are required"}
+        return {
+            "ok": False,
+            "mode": "model_ground_truth_bakeoff",
+            "error": "references.vocals and references.instrumental are required",
+        }
 
     models = _normalise_models(payload.get("models"))
     timeout_seconds = max(300, min(3300, int(payload.get("model_timeout_seconds") or 1800)))
@@ -129,9 +134,12 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
     with tempfile.TemporaryDirectory(prefix="litelabs_model_gt_") as temp:
         root = Path(temp)
         source = root / _filename_from_url(audio_url, "source.wav")
+        source_wav = root / "source_wav" / "source.wav"
         if progress:
             progress("Downloading source mix", 3)
         _download(audio_url, source)
+        _normalise_audio(source, source_wav)
+        source_audio, source_rate = _load(source_wav)
 
         reference_audio = {}
         for stem in ("vocals", "instrumental"):
@@ -147,14 +155,22 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
             if progress:
                 progress(f"Running {model}", int(8 + 78 * index / max(1, len(models))))
             cmd = [
-                "audio-separator", str(source),
-                "--model_filename", model,
-                "--model_file_dir", str(model_dir),
-                "--output_dir", str(output_dir),
-                "--output_format", "FLAC",
-                "--mdxc_segment_size", str(segment_size),
-                "--mdxc_overlap", str(overlap),
-                "--mdxc_batch_size", str(batch_size),
+                "audio-separator",
+                str(source),
+                "--model_filename",
+                model,
+                "--model_file_dir",
+                str(model_dir),
+                "--output_dir",
+                str(output_dir),
+                "--output_format",
+                "FLAC",
+                "--mdxc_segment_size",
+                str(segment_size),
+                "--mdxc_overlap",
+                str(overlap),
+                "--mdxc_batch_size",
+                str(batch_size),
             ]
             if use_autocast:
                 cmd.append("--use_autocast")
@@ -162,31 +178,52 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
             row = {"model": model, "ok": False, "command": cmd}
             try:
                 returncode, output, runtime, peak_vram = _run_with_gpu_monitor(cmd, timeout_seconds)
-                row.update({
-                    "runtime_seconds": round(runtime, 3),
-                    "peak_gpu_memory_mib": peak_vram,
-                    "returncode": returncode,
-                    "log_tail": output[-6000:],
-                })
+                row.update(
+                    {
+                        "runtime_seconds": round(runtime, 3),
+                        "peak_gpu_memory_mib": peak_vram,
+                        "returncode": returncode,
+                        "log_tail": output[-6000:],
+                    }
+                )
                 if returncode != 0:
                     raise RuntimeError(f"audio-separator exited with code {returncode}")
 
-                scores = {}
-                generated_files = {}
-                for stem in ("vocals", "instrumental"):
-                    generated = _find_stem(output_dir, stem)
-                    if generated is None:
-                        raise FileNotFoundError(f"Could not identify generated {stem} file")
-                    generated_files[stem] = generated.name
-                    wav = root / "normalised" / f"{index:02d}_{stem}.wav"
-                    _normalise_audio(generated, wav)
-                    estimate, rate = _load(wav)
-                    reference, ref_rate = reference_audio[stem]
-                    if rate != ref_rate:
-                        raise ValueError("Sample-rate mismatch after normalisation")
-                    scores[stem] = _score(reference, estimate, rate)
+                generated_vocals = _find_vocals(output_dir)
+                if generated_vocals is None:
+                    raise FileNotFoundError("Could not identify generated vocals file")
 
-                row.update({"ok": True, "scores": scores, "generated_files": generated_files})
+                vocals_wav = root / "normalised" / f"{index:02d}_vocals.wav"
+                _normalise_audio(generated_vocals, vocals_wav)
+                vocals_estimate, vocals_rate = _load(vocals_wav)
+                if vocals_rate != source_rate:
+                    raise ValueError("Source/vocal sample-rate mismatch after normalisation")
+
+                vocals_reference, vocals_ref_rate = reference_audio["vocals"]
+                instrumental_reference, instrumental_ref_rate = reference_audio["instrumental"]
+                if vocals_rate != vocals_ref_rate or source_rate != instrumental_ref_rate:
+                    raise ValueError("Reference sample-rate mismatch after normalisation")
+
+                length = min(len(source_audio), len(vocals_estimate))
+                if length < source_rate:
+                    raise ValueError("Generated vocals are too short to derive an instrumental")
+                instrumental_estimate = source_audio[:length] - vocals_estimate[:length]
+
+                scores = {
+                    "vocals": _score(vocals_reference, vocals_estimate, vocals_rate),
+                    "instrumental": _score(instrumental_reference, instrumental_estimate, source_rate),
+                }
+                row.update(
+                    {
+                        "ok": True,
+                        "scores": scores,
+                        "generated_files": {
+                            "vocals": generated_vocals.name,
+                            "instrumental": "derived: source mix minus generated vocals",
+                        },
+                        "instrumental_derivation": "source_minus_vocals",
+                    }
+                )
             except Exception as exc:
                 row.update({"error": str(exc), "error_type": exc.__class__.__name__})
             rows.append(row)
@@ -196,15 +233,25 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
         leaderboard = []
         for row in rows:
             if row.get("ok") and stem in (row.get("scores") or {}):
-                entry = {"model": row["model"], "runtime_seconds": row.get("runtime_seconds"), "peak_gpu_memory_mib": row.get("peak_gpu_memory_mib")}
+                entry = {
+                    "model": row["model"],
+                    "runtime_seconds": row.get("runtime_seconds"),
+                    "peak_gpu_memory_mib": row.get("peak_gpu_memory_mib"),
+                }
                 entry.update(row["scores"][stem])
                 leaderboard.append(entry)
-        leaderboards[stem] = sorted(leaderboard, key=lambda item: (-float(item.get("quality_score") or 0), -float(item.get("si_sdr_db") or -999)))
+        leaderboards[stem] = sorted(
+            leaderboard,
+            key=lambda item: (
+                -float(item.get("quality_score") or 0),
+                -float(item.get("si_sdr_db") or -999),
+            ),
+        )
 
     return {
         "ok": True,
         "mode": "model_ground_truth_bakeoff",
-        "schema_version": 1,
+        "schema_version": 2,
         "models_requested": models,
         "runs": rows,
         "leaderboards": leaderboards,
@@ -216,5 +263,5 @@ def build_model_ground_truth_bakeoff(payload: dict, progress=None) -> dict:
             "use_autocast": use_autocast,
         },
         "no_audio_exported": True,
-        "metric_note": "Each generated vocal and instrumental stem is timing-, polarity- and gain-aligned to its genuine reference before scoring.",
+        "metric_note": "Generated vocals are scored directly. Instrumentals are derived as source mix minus generated vocals, then both are timing-, polarity- and gain-aligned to genuine references before scoring.",
     }
