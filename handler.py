@@ -32,9 +32,7 @@ def download_file(url: str, destination: Path) -> None:
 
 
 def content_type_for(path: Path) -> str:
-    if path.name.lower().endswith(".zip"):
-        return "application/zip"
-    return "application/octet-stream"
+    return "application/zip" if path.name.lower().endswith(".zip") else "application/octet-stream"
 
 
 def upload_file_put(url: str, path: Path) -> None:
@@ -67,24 +65,15 @@ def build_audio_separator_discovery(payload: dict | None = None) -> dict:
     list_format = str(payload.get("list_format") or "pretty").strip().lower()
     if list_format not in {"pretty", "json"}:
         list_format = "pretty"
-    list_command = ["audio-separator", "--list_models", "--list_limit", str(list_limit), "--list_format", list_format]
+    command = ["audio-separator", "--list_models", "--list_limit", str(list_limit), "--list_format", list_format]
     if list_filter:
-        list_command.extend(["--list_filter", list_filter])
+        command.extend(["--list_filter", list_filter])
     commands = []
     if bool(payload.get("include_help", False)):
         commands.append(run_discovery_command(["audio-separator", "--help"], output_limit=20000))
-    commands.append(run_discovery_command(list_command, output_limit=100000))
+    commands.append(run_discovery_command(command, output_limit=100000))
     files = sorted(str(path.relative_to(model_dir)) for path in model_dir.rglob("*") if path.is_file())[:250]
-    return {
-        "ok": True,
-        "mode": "audio_separator_discovery",
-        "list_filter": list_filter or None,
-        "list_limit": list_limit,
-        "list_format": list_format,
-        "env": {"LITELABS_AUDIO_SEPARATOR_MODEL_DIR": str(model_dir), "STEMFORGE_MODEL_DIR": os.getenv("STEMFORGE_MODEL_DIR", "")},
-        "model_dir_files": files,
-        "commands": commands,
-    }
+    return {"ok": True, "mode": "audio_separator_discovery", "list_filter": list_filter or None, "list_limit": list_limit, "list_format": list_format, "env": {"LITELABS_AUDIO_SEPARATOR_MODEL_DIR": str(model_dir), "STEMFORGE_MODEL_DIR": os.getenv("STEMFORGE_MODEL_DIR", "")}, "model_dir_files": files, "commands": commands}
 
 
 def load_ground_truth_builder():
@@ -103,29 +92,25 @@ def load_ground_truth_builder():
 def handler(job: dict) -> dict:
     print("LiteLABS research job received", flush=True)
     payload = job.get("input") or {}
-    modes = [
-        "system_info", "master_pack", "model_bakeoff", "benchmark_suite",
-        "ground_truth_benchmark", "model_ground_truth_bakeoff", "cascade_ground_truth_bakeoff",
-        "vocal_residual_test", "audio_separator_discovery",
-    ]
+    modes = ["system_info", "master_pack", "model_bakeoff", "benchmark_suite", "ground_truth_benchmark", "model_ground_truth_bakeoff", "cascade_ground_truth_bakeoff", "multi_case_ground_truth_bakeoff", "vocal_residual_test", "audio_separator_discovery"]
+
     if payload.get("healthcheck") is True:
-        module_status = {"ground_truth_benchmark": False, "model_ground_truth_bakeoff": False, "cascade_ground_truth_bakeoff": False}
-        try:
-            load_ground_truth_builder()
-            module_status["ground_truth_benchmark"] = True
-        except Exception as exc:
-            module_status["ground_truth_benchmark_error"] = str(exc)
-        try:
-            from model_ground_truth_bakeoff import build_model_ground_truth_bakeoff  # noqa: F401
-            module_status["model_ground_truth_bakeoff"] = True
-        except Exception as exc:
-            module_status["model_ground_truth_bakeoff_error"] = str(exc)
-        try:
-            from cascade_ground_truth_bakeoff import build_cascade_ground_truth_bakeoff  # noqa: F401
-            module_status["cascade_ground_truth_bakeoff"] = True
-        except Exception as exc:
-            module_status["cascade_ground_truth_bakeoff_error"] = str(exc)
-        return {"ok": True, "status": "ready", "service": "litelabs-research-worker", "modes": modes, "module_status": module_status}
+        status = {}
+        checks = {
+            "ground_truth_benchmark": ("ground_truth_benchmark", "build_ground_truth_benchmark"),
+            "model_ground_truth_bakeoff": ("model_ground_truth_bakeoff", "build_model_ground_truth_bakeoff"),
+            "cascade_ground_truth_bakeoff": ("cascade_ground_truth_bakeoff", "build_cascade_ground_truth_bakeoff"),
+            "multi_case_ground_truth_bakeoff": ("multi_case_ground_truth_bakeoff", "build_multi_case_ground_truth_bakeoff"),
+        }
+        for key, (module_name, attribute) in checks.items():
+            try:
+                module = __import__(module_name, fromlist=[attribute])
+                getattr(module, attribute)
+                status[key] = True
+            except Exception as exc:
+                status[key] = False
+                status[f"{key}_error"] = str(exc)
+        return {"ok": True, "status": "ready", "service": "litelabs-research-worker", "modes": modes, "module_status": status}
 
     mode = payload.get("mode") or "master_pack"
     progress_url = payload.get("progress_url")
@@ -145,28 +130,18 @@ def handler(job: dict) -> dict:
             return build_audio_separator_discovery(payload)
         if mode == "benchmark_suite":
             from benchmark_suite import build_benchmark_suite
-            progress("Starting no-export benchmark suite", 2)
-            result = build_benchmark_suite(payload, progress=progress)
-            progress("Benchmark batch complete", 100)
-            return result
+            return build_benchmark_suite(payload, progress=progress)
         if mode == "ground_truth_benchmark":
-            build_ground_truth_benchmark = load_ground_truth_builder()
-            progress("Starting ground-truth benchmark", 2)
-            result = build_ground_truth_benchmark(payload, progress=progress)
-            progress("Ground-truth benchmark complete", 100)
-            return result
+            return load_ground_truth_builder()(payload, progress=progress)
         if mode == "model_ground_truth_bakeoff":
             from model_ground_truth_bakeoff import build_model_ground_truth_bakeoff
-            progress("Starting model ground-truth bakeoff", 2)
-            result = build_model_ground_truth_bakeoff(payload, progress=progress)
-            progress("Model ground-truth bakeoff complete", 100)
-            return result
+            return build_model_ground_truth_bakeoff(payload, progress=progress)
         if mode == "cascade_ground_truth_bakeoff":
             from cascade_ground_truth_bakeoff import build_cascade_ground_truth_bakeoff
-            progress("Starting vocal-first cascade comparison", 2)
-            result = build_cascade_ground_truth_bakeoff(payload, progress=progress)
-            progress("Cascade comparison complete", 100)
-            return result
+            return build_cascade_ground_truth_bakeoff(payload, progress=progress)
+        if mode == "multi_case_ground_truth_bakeoff":
+            from multi_case_ground_truth_bakeoff import build_multi_case_ground_truth_bakeoff
+            return build_multi_case_ground_truth_bakeoff(payload, progress=progress)
 
         with tempfile.TemporaryDirectory(prefix="litelabs_research_") as temp_dir:
             temp_root = Path(temp_dir)
@@ -178,14 +153,12 @@ def handler(job: dict) -> dict:
                     return {"ok": False, "error": "Missing required input.audio_url"}
                 filename = payload.get("filename") or infer_filename(audio_url, "track.mp3")
                 input_path = temp_root / filename
-                progress("Downloading research audio", 5)
                 download_file(audio_url, input_path)
                 from research_tools import build_model_bakeoff
                 result = build_model_bakeoff(input_path=input_path, output_root=output_root, filename=filename, models=payload.get("models"), output_format=str(payload.get("output_format") or "flac").lower().strip(), progress=progress)
                 archive_path = Path(result["archive_path"])
                 uploaded = False
                 if result_put_url:
-                    progress("Uploading research bake-off ZIP", 95)
                     upload_file_put(result_put_url, archive_path)
                     uploaded = True
                 return {"ok": True, "mode": mode, "track": result["track"], "archive_size_bytes": archive_path.stat().st_size, "uploaded": uploaded, "result_url": result_public_url, "runs": result["runs"], "files": result["files"]}
