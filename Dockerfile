@@ -5,6 +5,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV STEMFORGE_MODEL_DIR=/models/bs_roformer_sw
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
+ENV LITELABS_ENGINE=BS-RoFormer-SW
+ENV LITELABS_RELEASE=2.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -23,9 +25,11 @@ COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip setuptools wheel && \
     python -m pip install -r /app/requirements.txt
 
-COPY master_pack.py /app/master_pack.py
+COPY master_pack.py /app/legacy_master_pack.py
+COPY master_pack_v2.py /app/master_pack.py
 COPY handler.py /app/handler.py
 COPY litelabs_live_patch.py /app/litelabs_live_patch.py
 RUN python /app/litelabs_live_patch.py
+RUN python -c "import sys; sys.path.insert(0, '/app'); import master_pack; assert master_pack.ENGINE_NAME == 'BS-RoFormer-SW'; print('LiteLABS v2 production baseline ready')"
 
 CMD ["python", "-u", "/app/handler.py"]
