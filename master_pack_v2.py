@@ -18,7 +18,7 @@ def build_master_pack(
     progress: ProgressCallback | None = None,
     output_format: str = "flac",
 ) -> dict:
-    """Build the LiteLABS v2 stem pack using BS-RoFormer-SW for every primary stem."""
+    """Build the LiteLABS v2 stem pack using the current production baseline."""
     started_at = time.monotonic()
 
     input_audio = input_audio.resolve()
@@ -28,15 +28,15 @@ def build_master_pack(
     output_format = safe_output_format(output_format)
     ext = output_format
 
-    notify(progress, "Checking LiteLABS v2 worker files", 18)
+    notify(progress, "Checking worker files", 18)
     require_file(input_audio, "input audio")
-    require_file(model_dir / "BS-Roformer-SW.ckpt", "BS-RoFormer-SW checkpoint")
-    require_file(model_dir / "BS-Roformer-SW.yaml", "BS-RoFormer-SW config")
+    require_file(model_dir / "BS-Roformer-SW.ckpt", "production checkpoint")
+    require_file(model_dir / "BS-Roformer-SW.yaml", "production config")
 
     track = safe_track_name(input_audio.name)
     job_root = work_root / track
     song_dir = job_root / "song"
-    bs_out = job_root / "bs_roformer_sw"
+    bs_out = job_root / "production_separation"
     master = output_root / f"{track}-stem-extraction-tools-{output_format}-pack"
 
     for folder in (song_dir, bs_out, master):
@@ -46,7 +46,7 @@ def build_master_pack(
     wav_file = song_dir / f"{track}.wav"
     run(["ffmpeg", "-y", "-i", input_audio, wav_file])
 
-    notify(progress, "Separating studio-style stems with BS-RoFormer-SW", 30)
+    notify(progress, "Separating studio-style stems", 30)
     run([
         "bs-roformer-infer",
         "--config_path", model_dir / "BS-Roformer-SW.yaml",
@@ -66,7 +66,7 @@ def build_master_pack(
 
     notify(progress, "Checking generated stems", 62)
     for label, path in stems.items():
-        require_file(path, f"BS-RoFormer-SW {label}")
+        require_file(path, label)
 
     notify(progress, "Analysing track and stem confidence", 66)
     optional_decisions = [
@@ -139,7 +139,7 @@ def build_master_pack(
         "calculating",
         format_elapsed(time.monotonic() - started_at),
         detected_genre,
-        f"{genre_reason}; engine: {ENGINE_NAME} ({ENGINE_VERSION})",
+        genre_reason,
         included_readme,
         omitted_readme,
     )
@@ -155,7 +155,7 @@ def build_master_pack(
         final_size,
         format_elapsed(time.monotonic() - started_at),
         detected_genre,
-        f"{genre_reason}; engine: {ENGINE_NAME} ({ENGINE_VERSION})",
+        genre_reason,
         included_readme,
         omitted_readme,
     )
