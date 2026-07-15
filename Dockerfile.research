@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
-ENV LITELABS_RESEARCH_BUILD=reference-free-stem-auditor-1
+ENV LITELABS_RESEARCH_BUILD=reference-free-stem-auditor-2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -29,10 +29,12 @@ COPY stem_pack_compare.py /app/stem_pack_compare.py
 COPY studio_mix_compatibility.py /app/studio_mix_compatibility.py
 COPY reference_free_stem_auditor.py /app/reference_free_stem_auditor.py
 COPY litelabs_reference_free_auditor_patch.py /app/litelabs_reference_free_auditor_patch.py
+COPY reference_free_auditor_v2_patch.py /app/reference_free_auditor_v2_patch.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 COPY litelabs_audio_separator_diagnostics_patch.py /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_reference_free_auditor_patch.py
+RUN python /app/reference_free_auditor_v2_patch.py
 RUN test -f /app/benchmark_suite.py \
     && test -f /app/ground_truth_benchmark.py \
     && test -f /app/model_ground_truth_bakeoff.py \
