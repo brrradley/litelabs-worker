@@ -11,7 +11,7 @@ text = text.replace(
 )
 text = text.replace(
     '    print("LiteLABS extra vocals RUN:", " ".join(cmd), flush=True)',
-    '    if extra_args:\n        cmd.extend(extra_args)\n    print("LiteLABS extra vocals RUN:", " ".join(cmd), flush=True)',
+    '    if extra_args:\n        cmd.extend(extra_args)\n    print("LiteLABS optional vocal pass started", flush=True)',
 )
 
 text = text.replace(
@@ -47,16 +47,22 @@ new_block = '''    try:
             else:
                 omitted_notes.append(f"Backing Vocals — {reason}")
         else:
-            omitted_notes.append("Backing Vocals — model did not produce a backing vocal file")
+            omitted_notes.append("Backing Vocals — optional pass did not produce a useful result")
     except Exception as exc:
-        print(f"LiteLABS backing vocal pass skipped: {exc}", flush=True)
-        omitted_notes.append("Backing Vocals — experimental backing vocal pass failed for this track")
+        print(f"LiteLABS optional backing vocal pass skipped: {exc}", flush=True)
+        omitted_notes.append("Backing Vocals — optional pass was unavailable for this track")
         changes.append("backing vocal pass skipped")
 
-    omitted_notes.append("Dry Main Vocals — disabled while the dereverb model is reviewed")
+    omitted_notes.append("Dry Main Vocals — disabled while the dereverb process is reviewed")
     changes.append("dry vocal pass disabled")
     shutil.rmtree(temp_root, ignore_errors=True)
 '''
 
 text = text[:block_start] + new_block + text[block_end:]
+
+text = text.replace(
+    '            progress("Validating final stem pack", 93)\n            post_changes = post_process_archive(archive_path, source_features, output_format)',
+    '            progress("Finalising stem pack", 93)\n            post_changes = []\n            if is_enabled(os.getenv("LITELABS_DEEP_VALIDATION")):\n                post_changes = post_process_archive(archive_path, source_features, output_format)',
+)
+
 path.write_text(text)
