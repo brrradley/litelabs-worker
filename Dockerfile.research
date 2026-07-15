@@ -4,7 +4,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
-ENV LITELABS_RESEARCH_BUILD=reference-free-stem-auditor-2
+ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
+ENV LITELABS_RESEARCH_BUILD=instrument-wireframe-1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -13,8 +14,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m pip install --upgrade pip setuptools wheel
-RUN python -m pip install audio-separator==0.44.2 onnxruntime-gpu==1.22.0 soundfile
-RUN mkdir -p /models/audio_separator
+RUN python -m pip install audio-separator==0.44.2 onnxruntime-gpu==1.22.0 soundfile essentia-tensorflow
+RUN mkdir -p /models/audio_separator /models/instrument_wireframe
+RUN curl -fL --retry 3 \
+    https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb \
+    -o /models/instrument_wireframe/discogs-effnet-bs64-1.pb \
+    && curl -fL --retry 3 \
+    https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb \
+    -o /models/instrument_wireframe/mtg_jamendo_instrument-discogs-effnet-1.pb
 
 COPY handler.py /app/handler.py
 COPY research_tools.py /app/research_tools.py
@@ -28,13 +35,16 @@ COPY stem_pack_inventory.py /app/stem_pack_inventory.py
 COPY stem_pack_compare.py /app/stem_pack_compare.py
 COPY studio_mix_compatibility.py /app/studio_mix_compatibility.py
 COPY reference_free_stem_auditor.py /app/reference_free_stem_auditor.py
+COPY instrument_wireframe.py /app/instrument_wireframe.py
 COPY litelabs_reference_free_auditor_patch.py /app/litelabs_reference_free_auditor_patch.py
 COPY reference_free_auditor_v2_patch.py /app/reference_free_auditor_v2_patch.py
+COPY litelabs_instrument_wireframe_patch.py /app/litelabs_instrument_wireframe_patch.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 COPY litelabs_audio_separator_diagnostics_patch.py /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_reference_free_auditor_patch.py
 RUN python /app/reference_free_auditor_v2_patch.py
+RUN python /app/litelabs_instrument_wireframe_patch.py
 RUN test -f /app/benchmark_suite.py \
     && test -f /app/ground_truth_benchmark.py \
     && test -f /app/model_ground_truth_bakeoff.py \
@@ -45,6 +55,7 @@ RUN test -f /app/benchmark_suite.py \
     && test -f /app/stem_pack_compare.py \
     && test -f /app/studio_mix_compatibility.py \
     && test -f /app/reference_free_stem_auditor.py \
-    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor; print('research modules import successfully')"
+    && test -f /app/instrument_wireframe.py \
+    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe; print('research modules import successfully')"
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
