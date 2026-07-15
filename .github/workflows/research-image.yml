@@ -32,6 +32,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ./Dockerfile.research
           push: true
           tags: |
             ghcr.io/brrradley/litelabs-research-worker:research-latest
