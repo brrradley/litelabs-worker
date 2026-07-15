@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
-ENV LITELABS_RESEARCH_BUILD=stem-pack-compare-1
+ENV LITELABS_RESEARCH_BUILD=studio-mix-compatibility-1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -26,6 +26,7 @@ COPY multi_case_ground_truth_bakeoff.py /app/multi_case_ground_truth_bakeoff.py
 COPY adaptive_research_campaign.py /app/adaptive_research_campaign.py
 COPY stem_pack_inventory.py /app/stem_pack_inventory.py
 COPY stem_pack_compare.py /app/stem_pack_compare.py
+COPY studio_mix_compatibility.py /app/studio_mix_compatibility.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 COPY litelabs_audio_separator_diagnostics_patch.py /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_audio_separator_diagnostics_patch.py
@@ -37,6 +38,7 @@ RUN test -f /app/benchmark_suite.py \
     && test -f /app/adaptive_research_campaign.py \
     && test -f /app/stem_pack_inventory.py \
     && test -f /app/stem_pack_compare.py \
-    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare; print('research modules import successfully')"
+    && test -f /app/studio_mix_compatibility.py \
+    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility; print('research modules import successfully')"
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
