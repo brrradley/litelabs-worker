@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import os
-import shutil
 import tempfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -55,7 +54,8 @@ def build_adaptive_recovery_run(payload: dict, progress=None) -> dict:
 
     with tempfile.TemporaryDirectory(prefix="litelabs_adaptive_recovery_") as temp:
         root = Path(temp)
-        filename = str(payload.get("filename") or Path(urlparse(source_url).path).name or "track.flac")
+        url_filename = unquote(Path(urlparse(source_url).path).name)
+        filename = str(payload.get("filename") or url_filename or "track.flac")
         source = root / filename
         if progress:
             progress("Downloading source audio", 8)
