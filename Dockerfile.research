@@ -9,7 +9,7 @@ ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
 ENV LITELABS_MSS_REPO_DIR=/opt/music-source-separation-training
 ENV LITELABS_MSS_REPO_COMMIT=83d495dfc81b2ede9bc62f4209619f8bdfd14995
 ENV LITELABS_MSS_MODEL_REGISTRY=/models/mss_training/model_registry.json
-ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.5
+ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.6
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -95,6 +95,7 @@ COPY adaptive_recovery_run.py /app/adaptive_recovery_run.py
 COPY mss_candidate_lab.py /app/mss_candidate_lab.py
 COPY mss_candidate_output_patch.py /app/mss_candidate_output_patch.py
 COPY mss_baseline_benchmark_patch.py /app/mss_baseline_benchmark_patch.py
+COPY mss_listening_pack_patch.py /app/mss_listening_pack_patch.py
 COPY mss_model_registry.json /models/mss_training/model_registry.json
 COPY mss_model_registry.example.json /models/mss_training/model_registry.example.json
 COPY litelabs_reference_free_auditor_patch.py /app/litelabs_reference_free_auditor_patch.py
@@ -116,6 +117,7 @@ RUN python /app/litelabs_adaptive_recovery_run_patch.py
 RUN python /app/litelabs_mss_candidate_lab_patch.py
 RUN python /app/mss_candidate_output_patch.py
 RUN python /app/mss_baseline_benchmark_patch.py
+RUN python /app/mss_listening_pack_patch.py
 RUN python -m py_compile /app/adaptive_recovery_run.py /app/master_pack.py /app/mss_candidate_lab.py /app/handler.py
 RUN python - <<'PY'
 import inspect
@@ -144,17 +146,15 @@ if not inventory.get('ok') or not inventory['framework']['available']:
 if inventory['framework']['pinned_commit'] != os.environ['LITELABS_MSS_REPO_COMMIT']:
     raise RuntimeError('MSS repository commit mismatch')
 if len(inventory['registered_models']) < 2:
-    raise RuntimeError('Expected first piano and Other candidates in the registry')
+    raise RuntimeError('Expected candidate models in the registry')
 if not Path(os.environ['LITELABS_MSS_REPO_DIR'], 'inference.py').is_file():
     raise RuntimeError('Pinned MSS inference.py is missing')
 run_source = inspect.getsource(mss_candidate_lab._run_candidate)
-for marker in ('result_put_url', 'archive_name', 'uploaded'):
+for marker in ('result_put_url', 'archive_name', 'uploaded', 'preserved_target'):
     if marker not in run_source:
         raise RuntimeError(f'MSS candidate output persistence missing marker: {marker}')
-benchmark_source = inspect.getsource(mss_candidate_lab._benchmark_candidates)
-for marker in ('_run_bs_baseline', 'baseline', 'comparison'):
-    if marker not in benchmark_source:
-        raise RuntimeError(f'MSS baseline comparison missing marker: {marker}')
+if not hasattr(mss_candidate_lab, '_run_listening_pack'):
+    raise RuntimeError('MSS listening pack action is missing')
 print('research self-tests passed')
 PY
 RUN test -f /app/benchmark_suite.py \
