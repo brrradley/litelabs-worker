@@ -12,8 +12,8 @@
       "licence_source": "https://github.com/facebookresearch/demucs",
       "commercial_use_allowed": false,
       "benchmark_approved": false,
-      "enabled": true,
-      "notes": "Independent six-stem piano challenger. Research use only until checkpoint terms and benchmark quality are confirmed."
+      "enabled": false,
+      "notes": "Rejected on What's Up: effectively silent piano output."
     },
     {
       "id": "viperx-bs-roformer-other-challenger",
@@ -27,8 +27,57 @@
       "licence_source": "https://github.com/TRvlvr/model_repo",
       "commercial_use_allowed": false,
       "benchmark_approved": false,
+      "enabled": false,
+      "notes": "Rejected on What's Up: two-stem Other behaved as an instrumental rather than a residual Other stem."
+    },
+    {
+      "id": "scnet-masked-xl-ihf-other",
+      "target_stem": "other",
+      "model_type": "scnet_masked",
+      "config_path": "/models/mss_training/scnet-masked-xl-ihf/config.yaml",
+      "checkpoint_path": "/models/mss_training/scnet-masked-xl-ihf/model.ckpt",
+      "release_repo": "ZFTurbo/Music-Source-Separation-Training",
+      "release_tag": "v1.0.17",
+      "asset_name_contains": ["scnet", "masked", "xl", "ihf"],
+      "licence": "Research use pending explicit checkpoint licence verification",
+      "licence_source": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.17",
+      "commercial_use_allowed": false,
+      "benchmark_approved": false,
       "enabled": true,
-      "notes": "Dedicated Other challenger listed by the MSS framework at SDR 6.85. Research use only pending licence verification and LiteLABS benchmark win."
+      "notes": "Genuine MUSDB four-stem residual Other challenger; published MUSDB18 Other SDR 7.7079."
+    },
+    {
+      "id": "scnet-xl-ihf-other",
+      "target_stem": "other",
+      "model_type": "scnet",
+      "config_path": "/models/mss_training/scnet-xl-ihf/config.yaml",
+      "checkpoint_path": "/models/mss_training/scnet-xl-ihf/model.ckpt",
+      "release_repo": "ZFTurbo/Music-Source-Separation-Training",
+      "release_tag": "v1.0.15",
+      "asset_name_contains": ["scnet", "xl", "ihf"],
+      "licence": "Research use pending explicit checkpoint licence verification",
+      "licence_source": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.15",
+      "commercial_use_allowed": false,
+      "benchmark_approved": false,
+      "enabled": true,
+      "notes": "Genuine MUSDB four-stem residual Other challenger; published MUSDB18 Other SDR 7.8828."
+    },
+    {
+      "id": "mvsep-mega53-piano-keys",
+      "target_stem": "piano",
+      "model_type": "bs_roformer",
+      "config_path": "/models/mss_training/mvsep-mega53/config.yaml",
+      "checkpoint_path": "/models/mss_training/mvsep-mega53/model.ckpt",
+      "release_repo": "ZFTurbo/Music-Source-Separation-Training",
+      "release_tag": "v1.0.21",
+      "asset_name_contains": ["53"],
+      "aggregate_output_names": ["piano", "digital-piano", "keys", "organ"],
+      "licence": "Research use pending explicit checkpoint licence verification",
+      "licence_source": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/tag/v1.0.21",
+      "commercial_use_allowed": false,
+      "benchmark_approved": false,
+      "enabled": true,
+      "notes": "53-stem discovery model; aggregate piano, digital-piano, keys and organ for a piano/keys recovery candidate. Requires at least 16 GB VRAM and may produce overlapping stems."
     }
   ]
 }
