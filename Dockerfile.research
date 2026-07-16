@@ -61,10 +61,12 @@ RUN python /app/litelabs_instrument_wireframe_patch.py
 RUN python /app/litelabs_combined_recovery_planner_patch.py
 RUN python /app/litelabs_track_profile_patch.py
 RUN python /app/litelabs_adaptive_recovery_run_patch.py
-RUN test -f /app/master_pack.py \
-    && grep -q 'piano_keys.flac' /app/master_pack.py \
-    && grep -q 'synth_strings_other.flac' /app/master_pack.py \
-    && test -f /app/benchmark_suite.py \
+RUN python -m py_compile /app/adaptive_recovery_run.py /app/master_pack.py
+RUN grep -q 'bs_piano' /app/master_pack.py \
+    && grep -q 'bs_other' /app/master_pack.py \
+    && grep -q 'baseline_preserved' /app/adaptive_recovery_run.py \
+    && grep -q 'mixture_residual_other' /app/adaptive_recovery_run.py
+RUN test -f /app/benchmark_suite.py \
     && test -f /app/ground_truth_benchmark.py \
     && test -f /app/model_ground_truth_bakeoff.py \
     && test -f /app/cascade_ground_truth_bakeoff.py \
@@ -78,6 +80,6 @@ RUN test -f /app/master_pack.py \
     && test -f /app/combined_recovery_planner.py \
     && test -f /app/track_profile.py \
     && test -f /app/adaptive_recovery_run.py \
-    && python -c "import sys; sys.path.insert(0, '/app'); import master_pack, benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe, combined_recovery_planner, track_profile, adaptive_recovery_run; print('research modules import successfully')"
+    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe, combined_recovery_planner, track_profile, adaptive_recovery_run; print('research modules import successfully')"
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
