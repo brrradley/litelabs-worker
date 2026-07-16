@@ -19,9 +19,28 @@ helper = '''\n\ndef _run_bs_baseline(audio_url: str, timeout_seconds: int = 1800
         root = Path(temp)
         input_dir = root / "input"
         output_dir = root / "output"
+        input_dir.mkdir(parents=True, exist_ok=True)
         filename = unquote(Path(urlparse(audio_url).path).name) or "track.flac"
-        source = input_dir / filename
-        _download(audio_url, source)
+        downloaded_source = root / filename
+        wav_source = input_dir / f"{Path(filename).stem}.wav"
+        _download(audio_url, downloaded_source)
+        conversion = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(downloaded_source), "-ar", "44100", "-ac", "2", str(wav_source)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_seconds,
+        )
+        if conversion.returncode != 0 or not wav_source.is_file():
+            return {
+                "ok": False,
+                "return_code": conversion.returncode,
+                "error": "Failed to convert baseline input to WAV",
+                "runtime_log": "\\n".join((conversion.stdout or "").splitlines()[-80:]),
+                "output_files": [],
+                "piano_metrics": None,
+                "other_metrics": None,
+            }
         command = [
             "bs-roformer-infer",
             "--config_path", str(config),
@@ -42,8 +61,8 @@ helper = '''\n\ndef _run_bs_baseline(audio_url: str, timeout_seconds: int = 1800
         return {
             "ok": completed.returncode == 0 and bool(piano_matches) and bool(other_matches),
             "return_code": completed.returncode,
-            "piano_metrics": _candidate_audio_metrics(piano_matches[0], source) if piano_matches else None,
-            "other_metrics": _candidate_audio_metrics(other_matches[0], source) if other_matches else None,
+            "piano_metrics": _candidate_audio_metrics(piano_matches[0], wav_source) if piano_matches else None,
+            "other_metrics": _candidate_audio_metrics(other_matches[0], wav_source) if other_matches else None,
             "runtime_log": "\\n".join((completed.stdout or "").splitlines()[-80:]),
             "output_files": [str(path.relative_to(output_dir)) for path in outputs],
         }
