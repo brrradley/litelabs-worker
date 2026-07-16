@@ -53,7 +53,13 @@ def _load_registry() -> list[dict]:
     if not registry_path.exists():
         return []
     payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    return list(payload.get("models") or payload if isinstance(payload, list) else [])
+    if isinstance(payload, dict):
+        models = payload.get("models") or []
+    elif isinstance(payload, list):
+        models = payload
+    else:
+        models = []
+    return [item for item in models if isinstance(item, dict)]
 
 
 def _validate_model(entry: dict) -> dict:
@@ -83,9 +89,9 @@ def _validate_model(entry: dict) -> dict:
     production_errors = list(validation_errors)
     if not commercial_ok:
         production_errors.append("commercial use is not approved")
-    production_ready = not production_errors and enabled and bool(entry.get("benchmark_approved", False))
     if not bool(entry.get("benchmark_approved", False)):
         production_errors.append("benchmark and listening approval is missing")
+    production_ready = not production_errors and enabled
 
     return {
         "id": model_id,
