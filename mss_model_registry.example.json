@@ -1,0 +1,15 @@
+{
+  "models": [
+    {
+      "id": "example-piano-candidate",
+      "target_stem": "piano",
+      "model_type": "bs_roformer",
+      "config_path": "/models/mss_training/example-piano/config.yaml",
+      "checkpoint_path": "/models/mss_training/example-piano/model.ckpt",
+      "licence": "REPLACE_WITH_CHECKPOINT_LICENCE",
+      "commercial_use_allowed": false,
+      "enabled": false,
+      "notes": "Do not enable until the checkpoint licence and benchmark result are verified."
+    }
+  ]
+}
