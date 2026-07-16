@@ -9,7 +9,7 @@ ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
 ENV LITELABS_MSS_REPO_DIR=/opt/music-source-separation-training
 ENV LITELABS_MSS_REPO_COMMIT=83d495dfc81b2ede9bc62f4209619f8bdfd14995
 ENV LITELABS_MSS_MODEL_REGISTRY=/models/mss_training/model_registry.json
-ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.4
+ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.5
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -20,16 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# Keep the existing production audio/CUDA stack intact. These are the research
-# services already used by LiteLABS and are installed separately so failures are clear.
 RUN python -m pip install \
     audio-separator==0.44.2 \
     onnxruntime-gpu==1.22.0 \
     soundfile \
     essentia-tensorflow
 
-# Roman's inference entrypoint needs only a small subset of the upstream training
-# requirements. Keep Torch, Torchaudio and Demucs from the working base image.
 RUN python -m pip install \
     matplotlib \
     librosa \
@@ -50,8 +46,6 @@ RUN git clone https://github.com/ZFTurbo/Music-Source-Separation-Training.git ${
     && test -f inference.py \
     && test -f LICENSE
 
-# Essentia's model host can be slow or intermittently time out. Download each
-# model independently with resume support and retries for all transient errors.
 RUN curl -fL -C - \
     --retry 10 --retry-all-errors --retry-delay 5 --retry-max-time 1200 \
     --connect-timeout 30 --max-time 1800 \
@@ -78,8 +72,6 @@ RUN test -s /models/instrument_wireframe/discogs-effnet-bs64-1.pb \
     && test -s /models/instrument_wireframe/genre_discogs400-discogs-effnet-1.pb \
     && test -s /models/instrument_wireframe/genre_discogs400-discogs-effnet-1.json
 
-# Import Roman's actual inference entrypoint during the image build. This catches
-# missing runtime packages before a serverless job reaches a model invocation.
 RUN cd ${LITELABS_MSS_REPO_DIR} \
     && python -c "import inference; print('MSS inference imports successfully')"
 
@@ -102,6 +94,7 @@ COPY track_profile.py /app/track_profile.py
 COPY adaptive_recovery_run.py /app/adaptive_recovery_run.py
 COPY mss_candidate_lab.py /app/mss_candidate_lab.py
 COPY mss_candidate_output_patch.py /app/mss_candidate_output_patch.py
+COPY mss_baseline_benchmark_patch.py /app/mss_baseline_benchmark_patch.py
 COPY mss_model_registry.json /models/mss_training/model_registry.json
 COPY mss_model_registry.example.json /models/mss_training/model_registry.example.json
 COPY litelabs_reference_free_auditor_patch.py /app/litelabs_reference_free_auditor_patch.py
@@ -122,6 +115,7 @@ RUN python /app/litelabs_track_profile_patch.py
 RUN python /app/litelabs_adaptive_recovery_run_patch.py
 RUN python /app/litelabs_mss_candidate_lab_patch.py
 RUN python /app/mss_candidate_output_patch.py
+RUN python /app/mss_baseline_benchmark_patch.py
 RUN python -m py_compile /app/adaptive_recovery_run.py /app/master_pack.py /app/mss_candidate_lab.py /app/handler.py
 RUN python - <<'PY'
 import inspect
@@ -157,6 +151,10 @@ run_source = inspect.getsource(mss_candidate_lab._run_candidate)
 for marker in ('result_put_url', 'archive_name', 'uploaded'):
     if marker not in run_source:
         raise RuntimeError(f'MSS candidate output persistence missing marker: {marker}')
+benchmark_source = inspect.getsource(mss_candidate_lab._benchmark_candidates)
+for marker in ('_run_bs_baseline', 'baseline', 'comparison'):
+    if marker not in benchmark_source:
+        raise RuntimeError(f'MSS baseline comparison missing marker: {marker}')
 print('research self-tests passed')
 PY
 RUN test -f /app/benchmark_suite.py \
