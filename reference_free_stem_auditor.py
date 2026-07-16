@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import math
+import shutil
 import tempfile
 import zipfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import numpy as np
 import requests
@@ -16,6 +17,16 @@ PRIMARY_STEMS = ("vocals", "drums", "bass", "guitar", "piano", "other")
 
 def _download(url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
+    parsed = urlparse(str(url))
+    if parsed.scheme == "file":
+        source = Path(unquote(parsed.path))
+        if not source.exists():
+            raise FileNotFoundError(f"Local audit input not found: {source}")
+        shutil.copy2(source, destination)
+        return
+    if parsed.scheme == "" and Path(str(url)).exists():
+        shutil.copy2(Path(str(url)), destination)
+        return
     with requests.get(url, stream=True, timeout=300) as response:
         response.raise_for_status()
         with destination.open("wb") as output:
@@ -66,7 +77,6 @@ def _role(path: Path) -> str | None:
 def _load(path: Path, target_rate: int = 44100) -> tuple[np.ndarray, int]:
     audio, rate = sf.read(path, always_2d=True, dtype="float32")
     if rate != target_rate:
-        # Keep the worker dependency-light; ffmpeg is always available in the image.
         import subprocess
         converted = path.with_name(path.stem + f"_{target_rate}.wav")
         subprocess.run(["ffmpeg", "-y", "-i", str(path), "-ar", str(target_rate), "-ac", "2", str(converted)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -90,93 +100,76 @@ def _db(value: float) -> float:
     return 20.0 * math.log10(max(value, 1e-12))
 
 
-def _corr(a: np.ndarray, b: np.ndarray) -> float:
-    length = min(len(a), len(b))
+def _corr(left: np.ndarray, right: np.ndarray) -> float:
+    length = min(len(left), len(right))
     if length < 2:
         return 0.0
-    a = a[:length].astype(np.float64)
-    b = b[:length].astype(np.float64)
-    a -= np.mean(a)
-    b -= np.mean(b)
-    denom = np.linalg.norm(a) * np.linalg.norm(b)
-    return float(np.dot(a, b) / denom) if denom > 1e-12 else 0.0
+    left = left[:length].astype(np.float64)
+    right = right[:length].astype(np.float64)
+    left -= np.mean(left)
+    right -= np.mean(right)
+    denominator = np.linalg.norm(left) * np.linalg.norm(right)
+    return float(np.dot(left, right) / denominator) if denominator > 1e-12 else 0.0
 
 
-def _spectral_vector(audio: np.ndarray, rate: int) -> np.ndarray:
-    mono = _mono(audio)
-    if len(mono) > rate * 90:
-        indexes = np.linspace(0, len(mono) - 1, rate * 90, dtype=np.int64)
-        mono = mono[indexes]
-    window = np.hanning(len(mono)) if len(mono) > 1 else np.ones(len(mono))
-    spectrum = np.abs(np.fft.rfft(mono * window)) + 1e-12
-    bands = np.geomspace(20, rate / 2, 65)
-    freqs = np.fft.rfftfreq(len(mono), 1.0 / rate)
-    values = []
-    for low, high in zip(bands[:-1], bands[1:]):
-        mask = (freqs >= low) & (freqs < high)
-        values.append(float(np.mean(spectrum[mask])) if np.any(mask) else 0.0)
-    vector = np.asarray(values, dtype=np.float64)
-    norm = np.linalg.norm(vector)
-    return vector / norm if norm > 1e-12 else vector
+def _spectral_similarity(left: np.ndarray, right: np.ndarray, rate: int) -> float:
+    import scipy.signal
+    left_mono = _mono(left)
+    right_mono = _mono(right)
+    length = min(len(left_mono), len(right_mono))
+    if length < 4096:
+        return 0.0
+    _, left_psd = scipy.signal.welch(left_mono[:length], fs=rate, nperseg=4096)
+    _, right_psd = scipy.signal.welch(right_mono[:length], fs=rate, nperseg=4096)
+    return max(0.0, min(1.0, _corr(np.log1p(left_psd), np.log1p(right_psd))))
 
 
-def _spectral_similarity(a: np.ndarray, b: np.ndarray, rate: int) -> float:
-    av = _spectral_vector(a, rate)
-    bv = _spectral_vector(b, rate)
-    return float(np.dot(av, bv)) if np.any(av) and np.any(bv) else 0.0
-
-
-def _band_ratios(audio: np.ndarray, rate: int) -> dict:
-    mono = _mono(audio)
-    if len(mono) > rate * 60:
-        indexes = np.linspace(0, len(mono) - 1, rate * 60, dtype=np.int64)
-        mono = mono[indexes]
-    spectrum = np.square(np.abs(np.fft.rfft(mono)), dtype=np.float64)
-    freqs = np.fft.rfftfreq(len(mono), 1.0 / rate)
-    total = float(np.sum(spectrum) + 1e-12)
-    def band(low: float, high: float) -> float:
-        return float(np.sum(spectrum[(freqs >= low) & (freqs < high)]) / total)
-    return {
-        "sub_bass_ratio": round(band(20, 90), 6),
-        "low_mid_ratio": round(band(90, 400), 6),
-        "mid_ratio": round(band(400, 2500), 6),
-        "presence_ratio": round(band(2500, 7000), 6),
-        "air_ratio": round(band(7000, rate / 2), 6),
-    }
+def _band_ratio(mono: np.ndarray, rate: int, low: float, high: float) -> float:
+    spectrum = np.abs(np.fft.rfft(mono.astype(np.float64))) ** 2
+    frequencies = np.fft.rfftfreq(len(mono), 1.0 / rate)
+    total = float(np.sum(spectrum)) + 1e-12
+    mask = (frequencies >= low) & (frequencies < high)
+    return float(np.sum(spectrum[mask]) / total)
 
 
 def _stem_stats(audio: np.ndarray, rate: int) -> dict:
     mono = _mono(audio)
-    rms = _rms(audio)
-    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
-    crest = peak / max(rms, 1e-12)
-    active = float(np.mean(np.abs(mono) > max(rms * 0.12, 1e-4))) if len(mono) else 0.0
-    diff_rms = _rms(np.diff(mono)) if len(mono) > 1 else 0.0
-    transient_ratio = diff_rms / max(_rms(mono), 1e-12)
+    rms = _rms(mono)
+    peak = float(np.max(np.abs(mono))) if len(mono) else 0.0
+    frame = max(1, int(rate * 0.05))
+    framed = mono[: len(mono) - len(mono) % frame].reshape(-1, frame) if len(mono) >= frame else mono.reshape(1, -1)
+    frame_rms = np.sqrt(np.mean(np.square(framed, dtype=np.float64), axis=1) + 1e-12)
+    active_ratio = float(np.mean(frame_rms > max(rms * 0.35, 1e-5)))
+    diff = np.diff(mono, prepend=mono[0] if len(mono) else 0.0)
+    transient_ratio = min(1.0, _rms(diff) / max(rms, 1e-12))
     return {
-        "duration_seconds": round(len(audio) / rate, 3),
+        "duration_seconds": round(len(mono) / rate, 3),
         "rms_dbfs": round(_db(rms), 3),
         "peak_dbfs": round(_db(peak), 3),
-        "crest_factor": round(crest, 4),
-        "active_ratio": round(active, 6),
+        "crest_factor": round(peak / max(rms, 1e-12), 4),
+        "active_ratio": round(active_ratio, 6),
         "transient_ratio": round(transient_ratio, 6),
-        "clipped_sample_ratio": round(float(np.mean(np.abs(audio) >= 0.999)), 8),
-        **_band_ratios(audio, rate),
+        "sub_bass_ratio": round(_band_ratio(mono, rate, 20, 80), 6),
+        "low_mid_ratio": round(_band_ratio(mono, rate, 80, 400), 6),
+        "mid_ratio": round(_band_ratio(mono, rate, 400, 2500), 6),
+        "presence_ratio": round(_band_ratio(mono, rate, 2500, 6000), 6),
+        "air_ratio": round(_band_ratio(mono, rate, 6000, 20000), 6),
+        "clipped_sample_ratio": round(float(np.mean(np.abs(mono) >= 0.999)), 8),
     }
 
 
-def _recommend(role: str, stats: dict, max_dup: float, reconstruction_db: float) -> tuple[str, list[str]]:
+def _recommend(role: str, stats: dict, duplication: float, reconstruction_db: float) -> tuple[str, list[str]]:
     reasons: list[str] = []
     severity = "pass"
-    if stats["active_ratio"] < 0.025:
-        reasons.append("very low activity; keep the stem but mark it uncertain")
-        severity = "review"
-    if max_dup >= 0.82:
-        reasons.append("very high similarity to another stem suggests duplication or heavy bleed")
+    if stats["rms_dbfs"] < -55 or stats["active_ratio"] < 0.015:
+        reasons.append("stem is nearly silent")
         severity = "retry"
-    elif max_dup >= 0.68:
-        reasons.append("elevated similarity to another stem suggests possible bleed")
-        severity = "review" if severity == "pass" else severity
+    if duplication > 0.72:
+        reasons.append("high similarity to another primary stem")
+        severity = "retry"
+    elif duplication > 0.55:
+        reasons.append("moderate similarity to another primary stem")
+        severity = "review"
     if stats["clipped_sample_ratio"] > 0.0001:
         reasons.append("clipping detected")
         severity = "retry"
@@ -259,13 +252,7 @@ def build_reference_free_stem_auditor(payload: dict, progress=None) -> dict:
                 duplication = 0.55 * corr + 0.45 * spectral
                 max_dup_by_role[left] = max(max_dup_by_role[left], duplication)
                 max_dup_by_role[right] = max(max_dup_by_role[right], duplication)
-                pairwise.append({
-                    "left": left,
-                    "right": right,
-                    "absolute_correlation": round(corr, 6),
-                    "spectral_similarity": round(spectral, 6),
-                    "duplication_risk": round(duplication, 6),
-                })
+                pairwise.append({"left": left, "right": right, "absolute_correlation": round(corr, 6), "spectral_similarity": round(spectral, 6), "duplication_risk": round(duplication, 6)})
 
         stems = []
         retry_queue = []
@@ -277,15 +264,7 @@ def build_reference_free_stem_auditor(payload: dict, progress=None) -> dict:
                 suggested_route = "run_alternate_parameter_pass_and_specialist_candidate"
             elif severity == "review":
                 suggested_route = "compare_alternate_parameter_pass"
-            item = {
-                "stem": role,
-                "file": str(mapped[role].relative_to(extract_root)),
-                "status": severity,
-                "suggested_route": suggested_route,
-                "max_duplication_risk": round(max_dup_by_role[role], 6),
-                "reasons": reasons,
-                "statistics": stats,
-            }
+            item = {"stem": role, "file": str(mapped[role].relative_to(extract_root)), "status": severity, "suggested_route": suggested_route, "max_duplication_risk": round(max_dup_by_role[role], 6), "reasons": reasons, "statistics": stats}
             stems.append(item)
             if severity in {"review", "retry"}:
                 retry_queue.append({"stem": role, "priority": 2 if severity == "retry" else 1, "suggested_route": suggested_route, "reasons": reasons})
@@ -298,29 +277,4 @@ def build_reference_free_stem_auditor(payload: dict, progress=None) -> dict:
         elif retry_queue or missing or reconstruction_error_db > -25:
             overall_status = "review_recommended"
 
-        return {
-            "ok": True,
-            "mode": "reference_free_stem_auditor",
-            "schema_version": 1,
-            "source_url": source_url,
-            "stem_pack_url": stem_pack_url,
-            "overall_status": overall_status,
-            "primary_stems_found": roles,
-            "missing_primary_stems": missing,
-            "reconstruction": {
-                "duration_seconds": round(length / rate, 3),
-                "residual_vs_source_db": round(reconstruction_error_db, 3),
-                "waveform_correlation": round(reconstruction_corr, 6),
-                "spectral_similarity": round(reconstruction_spectral, 6),
-                "interpretation": "More-negative residual dB is better. This is a consistency check, not studio-reference quality scoring.",
-            },
-            "stems": stems,
-            "pairwise_duplication": sorted(pairwise, key=lambda row: -row["duplication_risk"]),
-            "retry_queue": retry_queue,
-            "ignored_audio_files": ignored,
-            "limitations": [
-                "Reference-free warnings identify inconsistency and likely contamination, not absolute studio-stem correctness.",
-                "Two wrong models can agree, and a clean-looking stem can still omit wanted material.",
-                "The auditor should guide alternate passes and listening tests rather than automatically replace stems yet.",
-            ],
-        }
+        return {"ok": True, "mode": "reference_free_stem_auditor", "schema_version": 1, "source_url": source_url, "stem_pack_url": stem_pack_url, "overall_status": overall_status, "primary_stems_found": roles, "missing_primary_stems": missing, "reconstruction": {"duration_seconds": round(length / rate, 3), "residual_vs_source_db": round(reconstruction_error_db, 3), "waveform_correlation": round(reconstruction_corr, 6), "spectral_similarity": round(reconstruction_spectral, 6), "interpretation": "More-negative residual dB is better. This is a consistency check, not studio-reference quality scoring."}, "stems": stems, "pairwise_duplication": sorted(pairwise, key=lambda row: -row["duplication_risk"]), "retry_queue": retry_queue, "ignored_audio_files": ignored, "limitations": ["Reference-free warnings identify inconsistency and likely contamination, not absolute studio-stem correctness.", "Two wrong models can agree, and a clean-looking stem can still omit wanted material.", "The auditor should guide alternate passes and listening tests rather than automatically replace stems yet."]}
