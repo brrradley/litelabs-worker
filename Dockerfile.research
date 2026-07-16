@@ -5,17 +5,26 @@ ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
 ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
-ENV LITELABS_RESEARCH_BUILD=adaptive-recovery-run-2.1
+ENV LITELABS_MSS_REPO_DIR=/opt/music-source-separation-training
+ENV LITELABS_MSS_REPO_COMMIT=83d495dfc81b2ede9bc62f4209619f8bdfd14995
+ENV LITELABS_MSS_MODEL_REGISTRY=/models/mss_training/model_registry.json
+ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
     libsamplerate0-dev \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m pip install --upgrade pip setuptools wheel
 RUN python -m pip install audio-separator==0.44.2 onnxruntime-gpu==1.22.0 soundfile essentia-tensorflow
-RUN mkdir -p /models/audio_separator /models/instrument_wireframe
+RUN mkdir -p /models/audio_separator /models/instrument_wireframe /models/mss_training
+RUN git clone https://github.com/ZFTurbo/Music-Source-Separation-Training.git ${LITELABS_MSS_REPO_DIR} \
+    && cd ${LITELABS_MSS_REPO_DIR} \
+    && git checkout ${LITELABS_MSS_REPO_COMMIT} \
+    && test -f inference.py \
+    && test -f LICENSE
 RUN curl -fL --retry 3 \
     https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb \
     -o /models/instrument_wireframe/discogs-effnet-bs64-1.pb \
@@ -46,12 +55,15 @@ COPY instrument_wireframe.py /app/instrument_wireframe.py
 COPY combined_recovery_planner.py /app/combined_recovery_planner.py
 COPY track_profile.py /app/track_profile.py
 COPY adaptive_recovery_run.py /app/adaptive_recovery_run.py
+COPY mss_candidate_lab.py /app/mss_candidate_lab.py
+COPY mss_model_registry.example.json /models/mss_training/model_registry.example.json
 COPY litelabs_reference_free_auditor_patch.py /app/litelabs_reference_free_auditor_patch.py
 COPY reference_free_auditor_v2_patch.py /app/reference_free_auditor_v2_patch.py
 COPY litelabs_instrument_wireframe_patch.py /app/litelabs_instrument_wireframe_patch.py
 COPY litelabs_combined_recovery_planner_patch.py /app/litelabs_combined_recovery_planner_patch.py
 COPY litelabs_track_profile_patch.py /app/litelabs_track_profile_patch.py
 COPY litelabs_adaptive_recovery_run_patch.py /app/litelabs_adaptive_recovery_run_patch.py
+COPY litelabs_mss_candidate_lab_patch.py /app/litelabs_mss_candidate_lab_patch.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 COPY litelabs_audio_separator_diagnostics_patch.py /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_audio_separator_diagnostics_patch.py
@@ -61,13 +73,17 @@ RUN python /app/litelabs_instrument_wireframe_patch.py
 RUN python /app/litelabs_combined_recovery_planner_patch.py
 RUN python /app/litelabs_track_profile_patch.py
 RUN python /app/litelabs_adaptive_recovery_run_patch.py
-RUN python -m py_compile /app/adaptive_recovery_run.py /app/master_pack.py /app/handler.py
+RUN python /app/litelabs_mss_candidate_lab_patch.py
+RUN python -m py_compile /app/adaptive_recovery_run.py /app/master_pack.py /app/mss_candidate_lab.py /app/handler.py
 RUN python - <<'PY'
 import inspect
+import os
 import sys
+from pathlib import Path
 sys.path.insert(0, '/app')
 import adaptive_recovery_run
 import master_pack
+import mss_candidate_lab
 
 source = inspect.getsource(adaptive_recovery_run.build_adaptive_recovery_run)
 required = ('baseline_preserved', 'mixture_residual_other', 'candidate_selection')
@@ -79,7 +95,15 @@ master_source = inspect.getsource(master_pack.build_master_pack)
 for marker in ('bs_piano', 'bs_other', 'piano_keys', 'synth_strings_other'):
     if marker not in master_source:
         raise RuntimeError(f'Master pack self-test missing marker: {marker}')
-print('adaptive recovery self-test passed')
+
+inventory = mss_candidate_lab.build_mss_candidate_lab({'action': 'inventory'})
+if not inventory.get('ok') or not inventory['framework']['available']:
+    raise RuntimeError(f'MSS candidate laboratory unavailable: {inventory}')
+if inventory['framework']['pinned_commit'] != os.environ['LITELABS_MSS_REPO_COMMIT']:
+    raise RuntimeError('MSS repository commit mismatch')
+if not Path(os.environ['LITELABS_MSS_REPO_DIR'], 'inference.py').is_file():
+    raise RuntimeError('Pinned MSS inference.py is missing')
+print('research self-tests passed')
 PY
 RUN test -f /app/benchmark_suite.py \
     && test -f /app/ground_truth_benchmark.py \
@@ -95,6 +119,7 @@ RUN test -f /app/benchmark_suite.py \
     && test -f /app/combined_recovery_planner.py \
     && test -f /app/track_profile.py \
     && test -f /app/adaptive_recovery_run.py \
-    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe, combined_recovery_planner, track_profile, adaptive_recovery_run; print('research modules import successfully')"
+    && test -f /app/mss_candidate_lab.py \
+    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe, combined_recovery_planner, track_profile, adaptive_recovery_run, mss_candidate_lab; print('research modules import successfully')"
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
