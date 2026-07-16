@@ -8,7 +8,7 @@ ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
 ENV LITELABS_MSS_REPO_DIR=/opt/music-source-separation-training
 ENV LITELABS_MSS_REPO_COMMIT=83d495dfc81b2ede9bc62f4209619f8bdfd14995
 ENV LITELABS_MSS_MODEL_REGISTRY=/models/mss_training/model_registry.json
-ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-1.1
+ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -72,6 +72,7 @@ COPY combined_recovery_planner.py /app/combined_recovery_planner.py
 COPY track_profile.py /app/track_profile.py
 COPY adaptive_recovery_run.py /app/adaptive_recovery_run.py
 COPY mss_candidate_lab.py /app/mss_candidate_lab.py
+COPY mss_model_registry.json /models/mss_training/model_registry.json
 COPY mss_model_registry.example.json /models/mss_training/model_registry.example.json
 COPY litelabs_reference_free_auditor_patch.py /app/litelabs_reference_free_auditor_patch.py
 COPY reference_free_auditor_v2_patch.py /app/reference_free_auditor_v2_patch.py
@@ -117,6 +118,8 @@ if not inventory.get('ok') or not inventory['framework']['available']:
     raise RuntimeError(f'MSS candidate laboratory unavailable: {inventory}')
 if inventory['framework']['pinned_commit'] != os.environ['LITELABS_MSS_REPO_COMMIT']:
     raise RuntimeError('MSS repository commit mismatch')
+if len(inventory['registered_models']) < 2:
+    raise RuntimeError('Expected first piano and Other candidates in the registry')
 if not Path(os.environ['LITELABS_MSS_REPO_DIR'], 'inference.py').is_file():
     raise RuntimeError('Pinned MSS inference.py is missing')
 print('research self-tests passed')
