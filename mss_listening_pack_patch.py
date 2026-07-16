@@ -9,7 +9,6 @@ if 'import shutil\n' not in text:
         raise RuntimeError('Could not locate subprocess import')
     text = text.replace(anchor, anchor + 'import shutil\n', 1)
 
-# Preserve the selected target stem outside _run_candidate's temporary directory.
 if 'preserved_target = None' not in text:
     marker = '        target_metrics = _candidate_audio_metrics(target_matches[0], source) if succeeded and target_matches else None\n'
     if marker not in text:
@@ -28,13 +27,8 @@ if '"preserved_target": str(preserved_target)' not in text:
     marker = '            "target_metrics": target_metrics,\n'
     if marker not in text:
         raise RuntimeError('Could not locate candidate return metrics')
-    text = text.replace(
-        marker,
-        marker + '            "preserved_target": str(preserved_target) if preserved_target else None,\n',
-        1,
-    )
+    text = text.replace(marker, marker + '            "preserved_target": str(preserved_target) if preserved_target else None,\n', 1)
 
-# Allow the current baseline runner to preserve piano and Other comparison stems.
 old_sig = 'def _run_bs_baseline(audio_url: str, timeout_seconds: int = 1800) -> dict:'
 new_sig = 'def _run_bs_baseline(audio_url: str, timeout_seconds: int = 1800, preserve_dir: str | None = None) -> dict:'
 if old_sig in text:
@@ -75,85 +69,47 @@ def _run_listening_pack(payload: dict, progress=None) -> dict:
     put_url = str(payload.get("result_put_url") or "").strip()
     public_url = payload.get("result_public_url")
     if not put_url:
-        return {
-            "ok": False,
-            "mode": "mss_candidate_lab",
-            "action": "listening_pack",
-            "error": "result_put_url is required so the ZIP survives serverless cleanup",
-            "required_models": ["scnet-xl-ihf-other", "scnet-masked-xl-ihf-other", "mvsep-mega53-piano-keys"],
-        }
+        return {"ok": False, "mode": "mss_candidate_lab", "action": "listening_pack", "error": "result_put_url is required so the ZIP survives serverless cleanup"}
     timeout_seconds = int(payload.get("timeout_seconds") or 1800)
-    model_ids = payload.get("model_ids") or [
-        "scnet-xl-ihf-other",
-        "scnet-masked-xl-ihf-other",
-        "mvsep-mega53-piano-keys",
-    ]
+    model_ids = payload.get("model_ids") or ["scnet-xl-ihf-other", "scnet-masked-xl-ihf-other", "mvsep-mega53-piano-keys"]
     with tempfile.TemporaryDirectory(prefix="litelabs_listening_pack_") as temp:
         root = Path(temp)
         preserve_root = root / "finalists"
         preserve_root.mkdir(parents=True, exist_ok=True)
-        if progress:
-            progress("Creating current LiteLABS comparison stems", 5)
         baseline = _run_bs_baseline(audio_url, timeout_seconds=timeout_seconds, preserve_dir=str(preserve_root))
         if not baseline.get("ok"):
             return {"ok": False, "mode": "mss_candidate_lab", "action": "listening_pack", "failed_stage": "baseline", "result": baseline}
         runs = []
-        total = max(1, len(model_ids))
-        for index, model_id in enumerate(model_ids, start=1):
-            if progress:
-                progress(f"Rendering listening finalist {index}/{total}", int(15 + (index - 1) * 65 / total))
-            result = _run_candidate({
-                "action": "run",
-                "model_id": model_id,
-                "audio_url": audio_url,
-                "timeout_seconds": timeout_seconds,
-                "preserve_dir": str(preserve_root),
-            }, progress=None)
+        for model_id in model_ids:
+            result = _run_candidate({"action": "run", "model_id": model_id, "audio_url": audio_url, "timeout_seconds": timeout_seconds, "preserve_dir": str(preserve_root)}, progress=None)
             runs.append({"model_id": model_id, "ok": bool(result.get("ok")), "error": result.get("error"), "metrics": result.get("target_metrics")})
             if not result.get("ok") or not result.get("preserved_target"):
                 return {"ok": False, "mode": "mss_candidate_lab", "action": "listening_pack", "failed_stage": model_id, "runs": runs}
-        readme = preserve_root / "README.txt"
-        readme.write_text(
-            "LiteLABS finalist listening pack\\n\\n"
-            "Compare current-bs-roformer-sw-piano with mvsep-mega53-piano-keys.\\n"
-            "Compare scnet-xl-ihf-other with scnet-masked-xl-ihf-other.\\n"
-            "Do not judge by loudness alone; listen for ownership, leakage, musical completeness and artifacts.\\n",
-            encoding="utf-8",
-        )
+        (preserve_root / "README.txt").write_text("LiteLABS finalist listening pack\nCompare BS piano with Mega53 keys; compare both SCNet Other stems.\n", encoding="utf-8")
         archive = root / "litelabs-finalist-listening-pack.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
             for item in sorted(preserve_root.iterdir()):
                 if item.is_file():
                     bundle.write(item, arcname=item.name)
-        if progress:
-            progress("Uploading finalist listening pack", 90)
         _upload_put(put_url, archive)
-        if progress:
-            progress("Finalist listening pack ready", 100)
-        return {
-            "ok": True,
-            "mode": "mss_candidate_lab",
-            "action": "listening_pack",
-            "schema_version": 1,
-            "uploaded": True,
-            "result_url": public_url,
-            "archive_name": archive.name,
-            "archive_size_bytes": archive.stat().st_size,
-            "files": sorted(item.name for item in preserve_root.iterdir() if item.is_file()),
-            "runs": runs,
-        }
+        return {"ok": True, "mode": "mss_candidate_lab", "action": "listening_pack", "schema_version": 1, "uploaded": True, "result_url": public_url, "archive_name": archive.name, "archive_size_bytes": archive.stat().st_size, "files": sorted(item.name for item in preserve_root.iterdir() if item.is_file()), "runs": runs}
 '''
 if 'def _run_listening_pack(' not in text:
     if builder_marker not in text:
         raise RuntimeError('Could not locate lab builder')
     text = text.replace(builder_marker, helper + builder_marker, 1)
 
+unsupported_marker = '    return {"ok": False, "mode": "mss_candidate_lab", "error": f"Unsupported action: {action}"}\n'
+if unsupported_marker not in text:
+    raise RuntimeError('Could not locate unsupported-action return')
+
+routes = ''
 if 'if action == "listening_pack"' not in text:
-    unsupported_marker = '    return {"ok": False, "mode": "mss_candidate_lab", "error": f"Unsupported action: {action}"}\n'
-    if unsupported_marker not in text:
-        raise RuntimeError('Could not locate unsupported-action return')
-    route = '    if action == "listening_pack":\n        return _run_listening_pack(payload, progress=progress)\n'
-    text = text.replace(unsupported_marker, route + unsupported_marker, 1)
+    routes += '    if action == "listening_pack":\n        return _run_listening_pack(payload, progress=progress)\n'
+if 'if action == "sw_ra"' not in text:
+    routes += '    if action == "sw_ra":\n        from sw_residual_allocator import build_sw_residual_allocator\n        return build_sw_residual_allocator(payload, progress=progress)\n'
+if routes:
+    text = text.replace(unsupported_marker, routes + unsupported_marker, 1)
 
 path.write_text(text, encoding='utf-8')
-print('MSS finalist listening pack patch applied')
+print('MSS listening pack and SW RA routes applied')
