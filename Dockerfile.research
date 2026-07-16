@@ -5,7 +5,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
 ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
-ENV LITELABS_RESEARCH_BUILD=adaptive-recovery-run-2
+ENV LITELABS_RESEARCH_BUILD=adaptive-recovery-run-2.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -61,11 +61,26 @@ RUN python /app/litelabs_instrument_wireframe_patch.py
 RUN python /app/litelabs_combined_recovery_planner_patch.py
 RUN python /app/litelabs_track_profile_patch.py
 RUN python /app/litelabs_adaptive_recovery_run_patch.py
-RUN python -m py_compile /app/adaptive_recovery_run.py /app/master_pack.py
-RUN grep -q 'bs_piano' /app/master_pack.py \
-    && grep -q 'bs_other' /app/master_pack.py \
-    && grep -q 'baseline_preserved' /app/adaptive_recovery_run.py \
-    && grep -q 'mixture_residual_other' /app/adaptive_recovery_run.py
+RUN python -m py_compile /app/adaptive_recovery_run.py /app/master_pack.py /app/handler.py
+RUN python - <<'PY'
+import inspect
+import sys
+sys.path.insert(0, '/app')
+import adaptive_recovery_run
+import master_pack
+
+source = inspect.getsource(adaptive_recovery_run.build_adaptive_recovery_run)
+required = ('baseline_preserved', 'mixture_residual_other', 'candidate_selection')
+missing = [name for name in required if name not in source]
+if missing:
+    raise RuntimeError(f'Adaptive recovery self-test missing markers: {missing}')
+
+master_source = inspect.getsource(master_pack.build_master_pack)
+for marker in ('bs_piano', 'bs_other', 'piano_keys', 'synth_strings_other'):
+    if marker not in master_source:
+        raise RuntimeError(f'Master pack self-test missing marker: {marker}')
+print('adaptive recovery self-test passed')
+PY
 RUN test -f /app/benchmark_suite.py \
     && test -f /app/ground_truth_benchmark.py \
     && test -f /app/model_ground_truth_bakeoff.py \
