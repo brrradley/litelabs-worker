@@ -5,7 +5,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
 ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
-ENV LITELABS_RESEARCH_BUILD=instrument-wireframe-1
+ENV LITELABS_RESEARCH_BUILD=combined-recovery-planner-1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -36,15 +36,18 @@ COPY stem_pack_compare.py /app/stem_pack_compare.py
 COPY studio_mix_compatibility.py /app/studio_mix_compatibility.py
 COPY reference_free_stem_auditor.py /app/reference_free_stem_auditor.py
 COPY instrument_wireframe.py /app/instrument_wireframe.py
+COPY combined_recovery_planner.py /app/combined_recovery_planner.py
 COPY litelabs_reference_free_auditor_patch.py /app/litelabs_reference_free_auditor_patch.py
 COPY reference_free_auditor_v2_patch.py /app/reference_free_auditor_v2_patch.py
 COPY litelabs_instrument_wireframe_patch.py /app/litelabs_instrument_wireframe_patch.py
+COPY litelabs_combined_recovery_planner_patch.py /app/litelabs_combined_recovery_planner_patch.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 COPY litelabs_audio_separator_diagnostics_patch.py /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_reference_free_auditor_patch.py
 RUN python /app/reference_free_auditor_v2_patch.py
 RUN python /app/litelabs_instrument_wireframe_patch.py
+RUN python /app/litelabs_combined_recovery_planner_patch.py
 RUN test -f /app/benchmark_suite.py \
     && test -f /app/ground_truth_benchmark.py \
     && test -f /app/model_ground_truth_bakeoff.py \
@@ -56,6 +59,7 @@ RUN test -f /app/benchmark_suite.py \
     && test -f /app/studio_mix_compatibility.py \
     && test -f /app/reference_free_stem_auditor.py \
     && test -f /app/instrument_wireframe.py \
-    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe; print('research modules import successfully')"
+    && test -f /app/combined_recovery_planner.py \
+    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe, combined_recovery_planner; print('research modules import successfully')"
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
