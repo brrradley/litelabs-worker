@@ -9,7 +9,7 @@ ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
 ENV LITELABS_MSS_REPO_DIR=/opt/music-source-separation-training
 ENV LITELABS_MSS_REPO_COMMIT=83d495dfc81b2ede9bc62f4209619f8bdfd14995
 ENV LITELABS_MSS_MODEL_REGISTRY=/models/mss_training/model_registry.json
-ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.2
+ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.3
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -29,19 +29,18 @@ RUN python -m pip install \
     essentia-tensorflow
 
 # Roman's inference entrypoint needs only a small subset of the upstream training
-# requirements. Do not re-pin torch, torchaudio, Demucs or OmegaConf here: the base
-# image already contains the working LiteLABS versions and resolver changes could
-# replace the CUDA stack.
+# requirements. Keep Torch, Torchaudio and Demucs from the working base image.
 RUN python -m pip install \
     matplotlib \
     librosa \
     ml_collections \
+    omegaconf==2.2.3 \
     beartype \
     rotary_embedding_torch \
     einops \
     tqdm
 
-RUN python -c "import matplotlib, librosa, ml_collections, beartype, rotary_embedding_torch, einops, tqdm; print('MSS lightweight dependencies import successfully')"
+RUN python -c "import matplotlib, librosa, ml_collections, omegaconf, beartype, rotary_embedding_torch, einops, tqdm; print('MSS lightweight dependencies import successfully')"
 
 RUN mkdir -p /models/audio_separator /models/instrument_wireframe /models/mss_training
 RUN git clone https://github.com/ZFTurbo/Music-Source-Separation-Training.git ${LITELABS_MSS_REPO_DIR} \
