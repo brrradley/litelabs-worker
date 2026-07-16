@@ -5,7 +5,7 @@ ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
 ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
-ENV LITELABS_RESEARCH_BUILD=adaptive-recovery-run-1
+ENV LITELABS_RESEARCH_BUILD=adaptive-recovery-run-2
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -30,6 +30,7 @@ RUN curl -fL --retry 3 \
     -o /models/instrument_wireframe/genre_discogs400-discogs-effnet-1.json
 
 COPY handler.py /app/handler.py
+COPY master_pack.py /app/master_pack.py
 COPY research_tools.py /app/research_tools.py
 COPY benchmark_suite.py /app/benchmark_suite.py
 COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
@@ -60,7 +61,10 @@ RUN python /app/litelabs_instrument_wireframe_patch.py
 RUN python /app/litelabs_combined_recovery_planner_patch.py
 RUN python /app/litelabs_track_profile_patch.py
 RUN python /app/litelabs_adaptive_recovery_run_patch.py
-RUN test -f /app/benchmark_suite.py \
+RUN test -f /app/master_pack.py \
+    && grep -q 'piano_keys.flac' /app/master_pack.py \
+    && grep -q 'synth_strings_other.flac' /app/master_pack.py \
+    && test -f /app/benchmark_suite.py \
     && test -f /app/ground_truth_benchmark.py \
     && test -f /app/model_ground_truth_bakeoff.py \
     && test -f /app/cascade_ground_truth_bakeoff.py \
@@ -74,6 +78,6 @@ RUN test -f /app/benchmark_suite.py \
     && test -f /app/combined_recovery_planner.py \
     && test -f /app/track_profile.py \
     && test -f /app/adaptive_recovery_run.py \
-    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe, combined_recovery_planner, track_profile, adaptive_recovery_run; print('research modules import successfully')"
+    && python -c "import sys; sys.path.insert(0, '/app'); import master_pack, benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe, combined_recovery_planner, track_profile, adaptive_recovery_run; print('research modules import successfully')"
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
