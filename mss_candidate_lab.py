@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -18,14 +19,33 @@ SUPPORTED_MODEL_TYPES = (
 )
 
 
-def _download(url: str, destination: Path) -> None:
+def _download(url: str, destination: Path, attempts: int = 8) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with requests.get(url, stream=True, timeout=300) as response:
-        response.raise_for_status()
-        with destination.open("wb") as output:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    output.write(chunk)
+    partial = destination.with_suffix(destination.suffix + ".part")
+    for attempt in range(1, attempts + 1):
+        try:
+            headers = {}
+            mode = "wb"
+            if partial.exists() and partial.stat().st_size > 0:
+                headers["Range"] = f"bytes={partial.stat().st_size}-"
+                mode = "ab"
+            with requests.get(url, stream=True, timeout=(30, 600), headers=headers) as response:
+                if response.status_code == 416 and partial.exists():
+                    partial.replace(destination)
+                    return
+                response.raise_for_status()
+                if response.status_code == 200 and mode == "ab":
+                    mode = "wb"
+                with partial.open(mode) as output:
+                    for chunk in response.iter_content(chunk_size=4 * 1024 * 1024):
+                        if chunk:
+                            output.write(chunk)
+            partial.replace(destination)
+            return
+        except Exception:
+            if attempt >= attempts:
+                raise
+            time.sleep(min(30, attempt * 3))
 
 
 def _load_registry() -> list[dict]:
@@ -44,46 +64,65 @@ def _validate_model(entry: dict) -> dict:
     checkpoint_path = Path(str(entry.get("checkpoint_path") or ""))
     licence = str(entry.get("licence") or "unknown").strip()
     commercial_ok = bool(entry.get("commercial_use_allowed", False))
-    errors = []
+    enabled = bool(entry.get("enabled", True))
+    validation_errors = []
     if not model_id:
-        errors.append("missing id")
+        validation_errors.append("missing id")
     if target not in CANONICAL_STEMS:
-        errors.append(f"unsupported target_stem: {target}")
+        validation_errors.append(f"unsupported target_stem: {target}")
     if model_type not in SUPPORTED_MODEL_TYPES:
-        errors.append(f"unsupported model_type: {model_type}")
+        validation_errors.append(f"unsupported model_type: {model_type}")
     if not config_path.is_file():
-        errors.append(f"missing config: {config_path}")
+        validation_errors.append(f"missing config: {config_path}")
     if not checkpoint_path.is_file():
-        errors.append(f"missing checkpoint: {checkpoint_path}")
+        validation_errors.append(f"missing checkpoint: {checkpoint_path}")
     if licence.lower() in {"", "unknown", "unspecified"}:
-        errors.append("checkpoint licence is not declared")
+        validation_errors.append("checkpoint licence status is not declared")
+
+    research_ready = not validation_errors and enabled
+    production_errors = list(validation_errors)
     if not commercial_ok:
-        errors.append("commercial use is not approved")
+        production_errors.append("commercial use is not approved")
+    production_ready = not production_errors and enabled and bool(entry.get("benchmark_approved", False))
+    if not bool(entry.get("benchmark_approved", False)):
+        production_errors.append("benchmark and listening approval is missing")
+
     return {
         "id": model_id,
         "target_stem": target,
         "model_type": model_type,
         "config_path": str(config_path),
         "checkpoint_path": str(checkpoint_path),
+        "config_url": entry.get("config_url"),
+        "checkpoint_url": entry.get("checkpoint_url"),
         "licence": licence,
+        "licence_source": entry.get("licence_source"),
         "commercial_use_allowed": commercial_ok,
-        "enabled": bool(entry.get("enabled", True)),
-        "ready": not errors and bool(entry.get("enabled", True)),
-        "errors": errors,
+        "benchmark_approved": bool(entry.get("benchmark_approved", False)),
+        "enabled": enabled,
+        "research_ready": research_ready,
+        "production_ready": production_ready,
+        "validation_errors": validation_errors,
+        "production_blockers": production_errors,
+        "notes": entry.get("notes", ""),
     }
 
 
 def _inventory() -> dict:
     repo_dir = Path(os.getenv("LITELABS_MSS_REPO_DIR", "/opt/music-source-separation-training"))
     registry = [_validate_model(entry) for entry in _load_registry()]
-    ready_by_stem = {
-        stem: [item["id"] for item in registry if item["ready"] and item["target_stem"] == stem]
+    research_by_stem = {
+        stem: [item["id"] for item in registry if item["research_ready"] and item["target_stem"] == stem]
+        for stem in CANONICAL_STEMS
+    }
+    production_by_stem = {
+        stem: [item["id"] for item in registry if item["production_ready"] and item["target_stem"] == stem]
         for stem in CANONICAL_STEMS
     }
     return {
         "ok": True,
         "mode": "mss_candidate_lab",
-        "schema_version": 1,
+        "schema_version": 2,
         "action": "inventory",
         "research_only": True,
         "goal": "Produce the fullest and highest-quality canonical stem kit from one uploaded mixture.",
@@ -96,15 +135,49 @@ def _inventory() -> dict:
         },
         "canonical_stems": list(CANONICAL_STEMS),
         "registered_models": registry,
-        "ready_candidates_by_stem": ready_by_stem,
+        "research_ready_candidates_by_stem": research_by_stem,
+        "production_ready_candidates_by_stem": production_by_stem,
         "quality_gate": {
-            "checkpoint_licence_required": True,
-            "commercial_approval_required": True,
+            "research_requires_declared_licence_status": True,
+            "production_requires_explicit_commercial_approval": True,
             "reference_free_scoring_is_not_ground_truth": True,
             "promotion_requires_benchmark_and_listening_win": True,
             "production_auto_selection_enabled": False,
         },
         "next_priority": ["piano", "other", "vocals", "guitar", "drums", "bass"],
+    }
+
+
+def _install_candidate(payload: dict, progress=None) -> dict:
+    model_id = str(payload.get("model_id") or "").strip()
+    raw_models = {str(item.get("id") or ""): item for item in _load_registry()}
+    entry = raw_models.get(model_id)
+    if not entry:
+        return {"ok": False, "mode": "mss_candidate_lab", "action": "install", "error": f"Unknown model_id: {model_id}"}
+    config_url = str(entry.get("config_url") or "").strip()
+    checkpoint_url = str(entry.get("checkpoint_url") or "").strip()
+    if not config_url or not checkpoint_url:
+        return {"ok": False, "mode": "mss_candidate_lab", "action": "install", "error": "Candidate has no install URLs"}
+    config_path = Path(str(entry.get("config_path") or ""))
+    checkpoint_path = Path(str(entry.get("checkpoint_path") or ""))
+    if progress:
+        progress(f"Installing config for {model_id}", 10)
+    _download(config_url, config_path)
+    if progress:
+        progress(f"Installing checkpoint for {model_id}", 35)
+    _download(checkpoint_url, checkpoint_path)
+    model = _validate_model(entry)
+    if progress:
+        progress(f"Candidate {model_id} installed", 100)
+    return {
+        "ok": model["research_ready"],
+        "mode": "mss_candidate_lab",
+        "schema_version": 2,
+        "action": "install",
+        "model": model,
+        "config_size_bytes": config_path.stat().st_size if config_path.exists() else 0,
+        "checkpoint_size_bytes": checkpoint_path.stat().st_size if checkpoint_path.exists() else 0,
+        "production_status": "blocked_pending_licence_and_benchmark" if not model["production_ready"] else "approved",
     }
 
 
@@ -115,8 +188,8 @@ def _run_candidate(payload: dict, progress=None) -> dict:
     model = models.get(model_id)
     if not model:
         return {"ok": False, "mode": "mss_candidate_lab", "action": "run", "error": f"Unknown model_id: {model_id}", "inventory": inventory}
-    if not model["ready"]:
-        return {"ok": False, "mode": "mss_candidate_lab", "action": "run", "error": "Model is not approved and ready", "model": model}
+    if not model["research_ready"]:
+        return {"ok": False, "mode": "mss_candidate_lab", "action": "run", "error": "Model is not research-ready", "model": model}
 
     audio_url = str(payload.get("audio_url") or payload.get("source_url") or "").strip()
     if not audio_url:
@@ -150,7 +223,7 @@ def _run_candidate(payload: dict, progress=None) -> dict:
         return {
             "ok": completed.returncode == 0,
             "mode": "mss_candidate_lab",
-            "schema_version": 1,
+            "schema_version": 2,
             "action": "run",
             "model": model,
             "target_stem": model["target_stem"],
@@ -158,6 +231,7 @@ def _run_candidate(payload: dict, progress=None) -> dict:
             "output_files": files,
             "log_tail": "\n".join((completed.stdout or "").splitlines()[-80:]),
             "promotion_status": "candidate_only",
+            "production_eligible": model["production_ready"],
             "next_action": "Score against the current LiteLABS baseline, mixture consistency, contamination metrics and listening tests.",
         }
 
@@ -166,6 +240,8 @@ def build_mss_candidate_lab(payload: dict, progress=None) -> dict:
     action = str(payload.get("action") or "inventory").strip().lower()
     if action == "inventory":
         return _inventory()
+    if action == "install":
+        return _install_candidate(payload, progress=progress)
     if action == "run":
         return _run_candidate(payload, progress=progress)
     return {"ok": False, "mode": "mss_candidate_lab", "error": f"Unsupported action: {action}"}
