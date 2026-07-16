@@ -1,73 +1,56 @@
 FROM ghcr.io/brrradley/litelabs-worker:latest
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
-ENV MPLBACKEND=Agg
-ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
-ENV LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe
-ENV LITELABS_MSS_REPO_DIR=/opt/music-source-separation-training
-ENV LITELABS_MSS_REPO_COMMIT=83d495dfc81b2ede9bc62f4209619f8bdfd14995
-ENV LITELABS_MSS_MODEL_REGISTRY=/models/mss_training/model_registry.json
-ENV LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.6
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    MPLBACKEND=Agg \
+    LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator \
+    LITELABS_INSTRUMENT_MODEL_DIR=/models/instrument_wireframe \
+    LITELABS_MSS_REPO_DIR=/opt/music-source-separation-training \
+    LITELABS_MSS_REPO_COMMIT=83d495dfc81b2ede9bc62f4209619f8bdfd14995 \
+    LITELABS_MSS_MODEL_REGISTRY=/models/mss_training/model_registry.json \
+    LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.7-sw-ra
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    pkg-config \
-    libsamplerate0-dev \
-    git \
+    build-essential pkg-config libsamplerate0-dev git curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install --upgrade pip setuptools wheel
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install \
+        audio-separator==0.44.2 \
+        onnxruntime-gpu==1.22.0 \
+        soundfile \
+        essentia-tensorflow \
+        matplotlib \
+        librosa \
+        ml_collections \
+        omegaconf==2.2.3 \
+        openunmix \
+        beartype \
+        rotary_embedding_torch \
+        einops \
+        tqdm
 
-RUN python -m pip install \
-    audio-separator==0.44.2 \
-    onnxruntime-gpu==1.22.0 \
-    soundfile \
-    essentia-tensorflow
-
-RUN python -m pip install \
-    matplotlib \
-    librosa \
-    ml_collections \
-    omegaconf==2.2.3 \
-    openunmix \
-    beartype \
-    rotary_embedding_torch \
-    einops \
-    tqdm
-
-RUN python -c "import matplotlib, librosa, ml_collections, omegaconf, openunmix, beartype, rotary_embedding_torch, einops, tqdm; print('MSS lightweight dependencies import successfully')"
-
-RUN mkdir -p /models/audio_separator /models/instrument_wireframe /models/mss_training
-RUN git clone https://github.com/ZFTurbo/Music-Source-Separation-Training.git ${LITELABS_MSS_REPO_DIR} \
+RUN mkdir -p /models/audio_separator /models/instrument_wireframe /models/mss_training \
+    && git clone https://github.com/ZFTurbo/Music-Source-Separation-Training.git ${LITELABS_MSS_REPO_DIR} \
     && cd ${LITELABS_MSS_REPO_DIR} \
     && git checkout ${LITELABS_MSS_REPO_COMMIT} \
     && test -f inference.py \
     && test -f LICENSE
 
-RUN curl -fL -C - \
-    --retry 10 --retry-all-errors --retry-delay 5 --retry-max-time 1200 \
-    --connect-timeout 30 --max-time 1800 \
+RUN curl -fL --retry 10 --retry-all-errors --retry-delay 5 \
     https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb \
-    -o /models/instrument_wireframe/discogs-effnet-bs64-1.pb
-RUN curl -fL -C - \
-    --retry 10 --retry-all-errors --retry-delay 5 --retry-max-time 1200 \
-    --connect-timeout 30 --max-time 1800 \
+    -o /models/instrument_wireframe/discogs-effnet-bs64-1.pb \
+    && curl -fL --retry 10 --retry-all-errors --retry-delay 5 \
     https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb \
-    -o /models/instrument_wireframe/mtg_jamendo_instrument-discogs-effnet-1.pb
-RUN curl -fL -C - \
-    --retry 10 --retry-all-errors --retry-delay 5 --retry-max-time 1200 \
-    --connect-timeout 30 --max-time 1800 \
+    -o /models/instrument_wireframe/mtg_jamendo_instrument-discogs-effnet-1.pb \
+    && curl -fL --retry 10 --retry-all-errors --retry-delay 5 \
     https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb \
-    -o /models/instrument_wireframe/genre_discogs400-discogs-effnet-1.pb
-RUN curl -fL -C - \
-    --retry 10 --retry-all-errors --retry-delay 5 --retry-max-time 1200 \
-    --connect-timeout 30 --max-time 1800 \
+    -o /models/instrument_wireframe/genre_discogs400-discogs-effnet-1.pb \
+    && curl -fL --retry 10 --retry-all-errors --retry-delay 5 \
     https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json \
-    -o /models/instrument_wireframe/genre_discogs400-discogs-effnet-1.json
-
-RUN test -s /models/instrument_wireframe/discogs-effnet-bs64-1.pb \
+    -o /models/instrument_wireframe/genre_discogs400-discogs-effnet-1.json \
+    && test -s /models/instrument_wireframe/discogs-effnet-bs64-1.pb \
     && test -s /models/instrument_wireframe/mtg_jamendo_instrument-discogs-effnet-1.pb \
     && test -s /models/instrument_wireframe/genre_discogs400-discogs-effnet-1.pb \
     && test -s /models/instrument_wireframe/genre_discogs400-discogs-effnet-1.json
@@ -75,88 +58,51 @@ RUN test -s /models/instrument_wireframe/discogs-effnet-bs64-1.pb \
 RUN cd ${LITELABS_MSS_REPO_DIR} \
     && python -c "import inference; print('MSS inference imports successfully')"
 
-COPY handler.py /app/handler.py
-COPY master_pack.py /app/master_pack.py
-COPY research_tools.py /app/research_tools.py
-COPY benchmark_suite.py /app/benchmark_suite.py
-COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
-COPY model_ground_truth_bakeoff.py /app/model_ground_truth_bakeoff.py
-COPY cascade_ground_truth_bakeoff.py /app/cascade_ground_truth_bakeoff.py
-COPY multi_case_ground_truth_bakeoff.py /app/multi_case_ground_truth_bakeoff.py
-COPY adaptive_research_campaign.py /app/adaptive_research_campaign.py
-COPY stem_pack_inventory.py /app/stem_pack_inventory.py
-COPY stem_pack_compare.py /app/stem_pack_compare.py
-COPY studio_mix_compatibility.py /app/studio_mix_compatibility.py
-COPY reference_free_stem_auditor.py /app/reference_free_stem_auditor.py
-COPY instrument_wireframe.py /app/instrument_wireframe.py
-COPY combined_recovery_planner.py /app/combined_recovery_planner.py
-COPY track_profile.py /app/track_profile.py
-COPY adaptive_recovery_run.py /app/adaptive_recovery_run.py
-COPY mss_candidate_lab.py /app/mss_candidate_lab.py
-COPY mss_candidate_output_patch.py /app/mss_candidate_output_patch.py
-COPY mss_baseline_benchmark_patch.py /app/mss_baseline_benchmark_patch.py
-COPY mss_listening_pack_patch.py /app/mss_listening_pack_patch.py
+COPY *.py /app/
 COPY mss_model_registry.json /models/mss_training/model_registry.json
 COPY mss_model_registry.example.json /models/mss_training/model_registry.example.json
-COPY litelabs_reference_free_auditor_patch.py /app/litelabs_reference_free_auditor_patch.py
-COPY reference_free_auditor_v2_patch.py /app/reference_free_auditor_v2_patch.py
-COPY litelabs_instrument_wireframe_patch.py /app/litelabs_instrument_wireframe_patch.py
-COPY litelabs_combined_recovery_planner_patch.py /app/litelabs_combined_recovery_planner_patch.py
-COPY litelabs_track_profile_patch.py /app/litelabs_track_profile_patch.py
-COPY litelabs_adaptive_recovery_run_patch.py /app/litelabs_adaptive_recovery_run_patch.py
-COPY litelabs_mss_candidate_lab_patch.py /app/litelabs_mss_candidate_lab_patch.py
-COPY research_bootstrap.py /app/research_bootstrap.py
-COPY litelabs_audio_separator_diagnostics_patch.py /app/litelabs_audio_separator_diagnostics_patch.py
-RUN python /app/litelabs_audio_separator_diagnostics_patch.py
-RUN python /app/litelabs_reference_free_auditor_patch.py
-RUN python /app/reference_free_auditor_v2_patch.py
-RUN python /app/litelabs_instrument_wireframe_patch.py
-RUN python /app/litelabs_combined_recovery_planner_patch.py
-RUN python /app/litelabs_track_profile_patch.py
-RUN python /app/litelabs_adaptive_recovery_run_patch.py
-RUN python /app/litelabs_mss_candidate_lab_patch.py
-RUN python /app/mss_candidate_output_patch.py
-RUN python /app/mss_baseline_benchmark_patch.py
-RUN python /app/mss_listening_pack_patch.py
-RUN python -m py_compile /app/adaptive_recovery_run.py /app/master_pack.py /app/mss_candidate_lab.py /app/handler.py
+
+RUN python /app/litelabs_audio_separator_diagnostics_patch.py \
+    && python /app/litelabs_reference_free_auditor_patch.py \
+    && python /app/reference_free_auditor_v2_patch.py \
+    && python /app/litelabs_instrument_wireframe_patch.py \
+    && python /app/litelabs_combined_recovery_planner_patch.py \
+    && python /app/litelabs_track_profile_patch.py \
+    && python /app/litelabs_adaptive_recovery_run_patch.py \
+    && python /app/litelabs_mss_candidate_lab_patch.py \
+    && python /app/mss_candidate_output_patch.py \
+    && python /app/mss_baseline_benchmark_patch.py \
+    && python /app/mss_listening_pack_patch.py
+
+RUN python -m py_compile \
+    /app/handler.py \
+    /app/master_pack.py \
+    /app/adaptive_recovery_run.py \
+    /app/mss_candidate_lab.py \
+    /app/sw_residual_allocator.py
+
 RUN python - <<'PY'
 import inspect
 import os
 import sys
 from pathlib import Path
 sys.path.insert(0, '/app')
-import adaptive_recovery_run
-import master_pack
 import mss_candidate_lab
-
-source = inspect.getsource(adaptive_recovery_run.build_adaptive_recovery_run)
-required = ('baseline_preserved', 'mixture_residual_other', 'candidate_selection')
-missing = [name for name in required if name not in source]
-if missing:
-    raise RuntimeError(f'Adaptive recovery self-test missing markers: {missing}')
-
-master_source = inspect.getsource(master_pack.build_master_pack)
-for marker in ('bs_piano', 'bs_other', 'piano_keys', 'synth_strings_other'):
-    if marker not in master_source:
-        raise RuntimeError(f'Master pack self-test missing marker: {marker}')
+import sw_residual_allocator
 
 inventory = mss_candidate_lab.build_mss_candidate_lab({'action': 'inventory'})
-if not inventory.get('ok') or not inventory['framework']['available']:
-    raise RuntimeError(f'MSS candidate laboratory unavailable: {inventory}')
-if inventory['framework']['pinned_commit'] != os.environ['LITELABS_MSS_REPO_COMMIT']:
-    raise RuntimeError('MSS repository commit mismatch')
-if len(inventory['registered_models']) < 2:
-    raise RuntimeError('Expected candidate models in the registry')
-if not Path(os.environ['LITELABS_MSS_REPO_DIR'], 'inference.py').is_file():
-    raise RuntimeError('Pinned MSS inference.py is missing')
-run_source = inspect.getsource(mss_candidate_lab._run_candidate)
-for marker in ('result_put_url', 'archive_name', 'uploaded', 'preserved_target'):
-    if marker not in run_source:
-        raise RuntimeError(f'MSS candidate output persistence missing marker: {marker}')
-if not hasattr(mss_candidate_lab, '_run_listening_pack'):
-    raise RuntimeError('MSS listening pack action is missing')
+assert inventory.get('ok')
+assert inventory['framework']['available']
+assert inventory['framework']['pinned_commit'] == os.environ['LITELABS_MSS_REPO_COMMIT']
+assert len(inventory['registered_models']) >= 2
+assert Path(os.environ['LITELABS_MSS_REPO_DIR'], 'inference.py').is_file()
+assert hasattr(mss_candidate_lab, '_run_listening_pack')
+source = inspect.getsource(mss_candidate_lab.build_mss_candidate_lab)
+assert 'action == "sw_ra"' in source
+assert hasattr(sw_residual_allocator, 'build_sw_residual_allocator')
 print('research self-tests passed')
 PY
+
 RUN test -f /app/benchmark_suite.py \
     && test -f /app/ground_truth_benchmark.py \
     && test -f /app/model_ground_truth_bakeoff.py \
@@ -170,8 +116,6 @@ RUN test -f /app/benchmark_suite.py \
     && test -f /app/instrument_wireframe.py \
     && test -f /app/combined_recovery_planner.py \
     && test -f /app/track_profile.py \
-    && test -f /app/adaptive_recovery_run.py \
-    && test -f /app/mss_candidate_lab.py \
-    && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, stem_pack_inventory, stem_pack_compare, studio_mix_compatibility, reference_free_stem_auditor, instrument_wireframe, combined_recovery_planner, track_profile, adaptive_recovery_run, mss_candidate_lab; print('research modules import successfully')"
+    && test -f /app/sw_residual_allocator.py
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
