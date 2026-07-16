@@ -19,28 +19,14 @@ helper = '''\n\ndef _run_bs_baseline(audio_url: str, timeout_seconds: int = 1800
         root = Path(temp)
         input_dir = root / "input"
         output_dir = root / "output"
-        input_dir.mkdir(parents=True, exist_ok=True)
         filename = unquote(Path(urlparse(audio_url).path).name) or "track.flac"
-        downloaded_source = root / filename
-        wav_source = input_dir / f"{Path(filename).stem}.wav"
-        _download(audio_url, downloaded_source)
-        conversion = subprocess.run(
-            ["ffmpeg", "-y", "-i", str(downloaded_source), "-ar", "44100", "-ac", "2", str(wav_source)],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout_seconds,
-        )
-        if conversion.returncode != 0 or not wav_source.is_file():
-            return {
-                "ok": False,
-                "return_code": conversion.returncode,
-                "error": "Failed to convert baseline input to WAV",
-                "runtime_log": "\\n".join((conversion.stdout or "").splitlines()[-80:]),
-                "output_files": [],
-                "piano_metrics": None,
-                "other_metrics": None,
-            }
+        downloaded = root / filename
+        _download(audio_url, downloaded)
+        input_dir.mkdir(parents=True, exist_ok=True)
+        source = input_dir / f"{Path(filename).stem}.wav"
+        subprocess.run([
+            "ffmpeg", "-y", "-i", str(downloaded), "-ar", "44100", "-ac", "2", str(source)
+        ], check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         command = [
             "bs-roformer-infer",
             "--config_path", str(config),
@@ -61,8 +47,8 @@ helper = '''\n\ndef _run_bs_baseline(audio_url: str, timeout_seconds: int = 1800
         return {
             "ok": completed.returncode == 0 and bool(piano_matches) and bool(other_matches),
             "return_code": completed.returncode,
-            "piano_metrics": _candidate_audio_metrics(piano_matches[0], wav_source) if piano_matches else None,
-            "other_metrics": _candidate_audio_metrics(other_matches[0], wav_source) if other_matches else None,
+            "piano_metrics": _candidate_audio_metrics(piano_matches[0], source) if piano_matches else None,
+            "other_metrics": _candidate_audio_metrics(other_matches[0], source) if other_matches else None,
             "runtime_log": "\\n".join((completed.stdout or "").splitlines()[-80:]),
             "output_files": [str(path.relative_to(output_dir)) for path in outputs],
         }
@@ -136,5 +122,100 @@ if old_tail in text:
 elif '"baseline": {' not in text:
     raise RuntimeError('Could not add baseline benchmark results')
 
+campaign_marker = '\n\ndef build_mss_candidate_lab(payload: dict, progress=None) -> dict:\n'
+campaign_helper = '''\n\ndef _campaign_gate(model: dict, metrics: dict | None, baseline_metrics: dict | None) -> dict:
+    reasons = []
+    if not metrics:
+        return {"status": "rejected", "reasons": ["missing_metrics"], "score": -999.0}
+    if metrics.get("rms_dbfs", -240.0) < -65.0:
+        reasons.append("effectively_silent_rms")
+    if metrics.get("peak_dbfs", -240.0) < -45.0:
+        reasons.append("effectively_silent_peak")
+    if metrics.get("active_ratio", 0.0) < 0.02:
+        reasons.append("mostly_inactive")
+    if model.get("target_stem") == "other" and metrics.get("mixture_cosine", 0.0) > 0.75:
+        reasons.append("likely_instrumental_not_residual_other")
+    delta_rms = round(metrics["rms_dbfs"] - baseline_metrics["rms_dbfs"], 3) if baseline_metrics else None
+    delta_cosine = round(metrics["mixture_cosine"] - baseline_metrics["mixture_cosine"], 6) if baseline_metrics else None
+    score = metrics.get("rms_dbfs", -240.0) + min(metrics.get("active_ratio", 0.0), 1.0) * 8.0 - abs(metrics.get("mixture_cosine", 0.0)) * 4.0
+    if reasons:
+        score -= 100.0
+    return {
+        "status": "rejected" if reasons else "listening_candidate",
+        "reasons": reasons,
+        "score": round(score, 3),
+        "delta_vs_baseline_rms_db": delta_rms,
+        "delta_vs_baseline_mixture_cosine": delta_cosine,
+    }
+
+
+def _run_campaign(payload: dict, progress=None) -> dict:
+    audio_url = str(payload.get("audio_url") or payload.get("source_url") or "").strip()
+    if not audio_url:
+        return {"ok": False, "mode": "mss_candidate_lab", "action": "campaign", "error": "audio_url is required"}
+    timeout_seconds = int(payload.get("timeout_seconds") or 1800)
+    inventory = _inventory()
+    enabled = [item for item in inventory["registered_models"] if item.get("enabled")]
+    baseline = _run_bs_baseline(audio_url, timeout_seconds=timeout_seconds)
+    if not baseline.get("ok"):
+        return {"ok": False, "mode": "mss_candidate_lab", "action": "campaign", "failed_stage": "baseline", "result": baseline}
+    results = []
+    total = max(1, len(enabled))
+    for index, model in enumerate(enabled, start=1):
+        if progress:
+            progress(f"Campaign {index}/{total}: {model['id']}", int(10 + (index - 1) * 75 / total))
+        result = _run_candidate({"action": "run", "model_id": model["id"], "audio_url": audio_url, "timeout_seconds": timeout_seconds}, progress=None)
+        metrics = result.get("target_metrics") if result.get("ok") else None
+        gate = _campaign_gate(model, metrics, baseline.get(f"{model['target_stem']}_metrics"))
+        results.append({
+            "model_id": model["id"],
+            "target_stem": model["target_stem"],
+            "model_type": model["model_type"],
+            "ok": bool(result.get("ok")),
+            "metrics": metrics,
+            "gate": gate,
+            "auto_installed_on_worker": result.get("auto_installed_on_worker"),
+            "runtime_log": result.get("log_tail"),
+            "error": result.get("error"),
+        })
+    ranked = {}
+    for stem in CANONICAL_STEMS:
+        items = [item for item in results if item["target_stem"] == stem]
+        items.sort(key=lambda item: item["gate"]["score"], reverse=True)
+        if items:
+            ranked[stem] = items
+    finalists = {stem: [item["model_id"] for item in items if item["gate"]["status"] == "listening_candidate"][:2] for stem, items in ranked.items()}
+    return {
+        "ok": True,
+        "mode": "mss_candidate_lab",
+        "schema_version": 5,
+        "action": "campaign",
+        "track_url": audio_url,
+        "baseline": {"model_id": "current-litelabs-bs-roformer-sw", "piano_metrics": baseline.get("piano_metrics"), "other_metrics": baseline.get("other_metrics")},
+        "registered_candidates": len(enabled),
+        "results": results,
+        "ranked_by_stem": ranked,
+        "listening_finalists": finalists,
+        "automatically_rejected": [item["model_id"] for item in results if item["gate"]["status"] == "rejected"],
+        "decision_policy": {"silent_rms_below_dbfs": -65.0, "silent_peak_below_dbfs": -45.0, "other_high_mixture_cosine_rejection": 0.75, "reference_free_metrics_are_not_ground_truth": True},
+        "next_action": "Only listen to the listed finalists. Rejected candidates need no further manual testing on this track.",
+    }
+'''
+if 'def _run_campaign(' not in text:
+    if campaign_marker not in text:
+        raise RuntimeError('Could not locate MSS lab builder')
+    text = text.replace(campaign_marker, campaign_helper + campaign_marker, 1)
+
+route = '''    if action == "benchmark":
+        return _benchmark_candidates(payload, progress=progress)
+'''
+new_route = route + '''    if action == "campaign":
+        return _run_campaign(payload, progress=progress)
+'''
+if route in text and 'if action == "campaign"' not in text:
+    text = text.replace(route, new_route, 1)
+elif 'if action == "campaign"' not in text:
+    raise RuntimeError('Could not add campaign action route')
+
 path.write_text(text, encoding='utf-8')
-print('MSS baseline comparison benchmark patch applied')
+print('MSS baseline comparison and automated campaign patch applied')
