@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -12,16 +13,67 @@ import requests
 import soundfile as sf
 
 STEMS = ("vocals", "drums", "bass", "guitar", "piano", "other")
+MODEL_SHA256 = "24e7d35ee9c64415673d3fd33e06a67cac2c103c5df6267ba1576459c775916e"
+CONFIG_URL = "https://huggingface.co/ChanTrail/BS-RoFormer/resolve/main/BS-Rofo-SW-Fixed.yaml?download=true"
+CHECKPOINT_URL = "https://huggingface.co/ChanTrail/BS-RoFormer/resolve/main/BS-Rofo-SW-Fixed.ckpt?download=true"
 
 
 def _download(url: str, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with requests.get(url, stream=True, timeout=(30, 600)) as response:
+    partial = path.with_suffix(path.suffix + ".part")
+    with requests.get(url, stream=True, timeout=(30, 1800)) as response:
         response.raise_for_status()
-        with path.open("wb") as handle:
+        with partial.open("wb") as handle:
             for chunk in response.iter_content(4 * 1024 * 1024):
                 if chunk:
                     handle.write(chunk)
+    partial.replace(path)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resolve_model_files(model_dir: Path, progress=None) -> tuple[Path, Path, bool]:
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    config_candidates = [
+        model_dir / "BS-Roformer-SW.yaml",
+        model_dir / "BS-Rofo-SW-Fixed.yaml",
+    ]
+    checkpoint_candidates = [
+        model_dir / "BS-Roformer-SW.ckpt",
+        model_dir / "BS-Rofo-SW-Fixed.ckpt",
+    ]
+
+    config = next((path for path in config_candidates if path.is_file()), None)
+    checkpoint = next((path for path in checkpoint_candidates if path.is_file()), None)
+    installed = False
+
+    if config is None:
+        if progress:
+            progress("Downloading fixed SW configuration", 2)
+        config = model_dir / "BS-Rofo-SW-Fixed.yaml"
+        _download(CONFIG_URL, config)
+        installed = True
+
+    if checkpoint is None:
+        if progress:
+            progress("Downloading fixed SW checkpoint", 4)
+        checkpoint = model_dir / "BS-Rofo-SW-Fixed.ckpt"
+        _download(CHECKPOINT_URL, checkpoint)
+        installed = True
+
+    actual_sha = _sha256(checkpoint)
+    if actual_sha != MODEL_SHA256:
+        checkpoint.unlink(missing_ok=True)
+        raise RuntimeError(f"BS-RoFormer-SW checkpoint hash mismatch: {actual_sha}")
+
+    return config, checkpoint, installed
 
 
 def _read(path: Path) -> tuple[np.ndarray, int]:
@@ -44,11 +96,17 @@ def build_sw_residual_allocator(payload: dict, progress=None) -> dict:
     strength = float(payload.get("allocation_strength") or 1.0)
     strength = max(0.0, min(1.0, strength))
     model_dir = Path(str(payload.get("model_dir") or "/models/bs_roformer_sw"))
-    config = model_dir / "BS-Roformer-SW.yaml"
-    checkpoint = model_dir / "BS-Roformer-SW.ckpt"
 
-    if not config.is_file() or not checkpoint.is_file():
-        return {"ok": False, "mode": "sw_residual_allocator", "error": "BS-RoFormer-SW model files are missing"}
+    try:
+        config, checkpoint, model_auto_installed = _resolve_model_files(model_dir, progress=progress)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "mode": "sw_residual_allocator",
+            "failed_stage": "model_setup",
+            "error": str(exc),
+            "model_dir": str(model_dir),
+        }
 
     with tempfile.TemporaryDirectory(prefix="litelabs_sw_ra_") as temp:
         root = Path(temp)
@@ -118,15 +176,12 @@ def build_sw_residual_allocator(payload: dict, progress=None) -> dict:
         residual = mixture - baseline_sum
         baseline_residual_rms = float(np.sqrt(np.mean(residual * residual) + 1e-12))
 
-        # Reference-free prototype: distribute residual according to each stem's
-        # local absolute energy, with a floor so quiet stems are not starved.
         if progress:
             progress("Allocating mixture residual across SW stems", 65)
         weights = np.abs(stack) + 1e-5
         weights /= np.sum(weights, axis=0, keepdims=True)
         allocated_stack = stack + strength * weights * residual[None, :, :]
 
-        # Any unallocated fraction is retained in Other so the exported set is exact.
         if strength < 1.0:
             allocated_stack[STEMS.index("other")] += (1.0 - strength) * residual
 
@@ -146,6 +201,10 @@ def build_sw_residual_allocator(payload: dict, progress=None) -> dict:
             "baseline_residual_rms_dbfs": _db(baseline_residual_rms),
             "final_residual_rms_dbfs": _db(final_residual_rms),
             "mixture_reconstruction_percent": round(exactness, 9),
+            "model_auto_installed": model_auto_installed,
+            "checkpoint_sha256": MODEL_SHA256,
+            "config_path": str(config),
+            "checkpoint_path": str(checkpoint),
         }
         (allocated_dir / "SW_RA_REPORT.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
 
@@ -169,7 +228,7 @@ def build_sw_residual_allocator(payload: dict, progress=None) -> dict:
         return {
             "ok": True,
             "mode": "sw_residual_allocator",
-            "schema_version": 1,
+            "schema_version": 2,
             "prototype": True,
             "official_mvsep_ra": False,
             "report": report,
