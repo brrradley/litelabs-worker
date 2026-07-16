@@ -4,22 +4,37 @@ path = Path('/app/mss_candidate_lab.py')
 text = path.read_text(encoding='utf-8')
 
 if 'import shutil\n' not in text:
-    text = text.replace('import subprocess\n', 'import subprocess\nimport shutil\n', 1)
+    anchor = 'import subprocess\n'
+    if anchor not in text:
+        raise RuntimeError('Could not locate subprocess import')
+    text = text.replace(anchor, anchor + 'import shutil\n', 1)
 
-old_target = '''        target_matches = [path for path in output_paths if model["target_stem"] in path.name.lower()]\n        target_metrics = _candidate_audio_metrics(target_matches[0], source) if succeeded and target_matches else None\n        put_url = str(payload.get("result_put_url") or "").strip()\n'''
-new_target = '''        target_matches = [path for path in output_paths if model["target_stem"] in path.name.lower()]\n        target_metrics = _candidate_audio_metrics(target_matches[0], source) if succeeded and target_matches else None\n        preserved_target = None\n        preserve_dir = str(payload.get("preserve_dir") or "").strip()\n        if succeeded and target_matches and preserve_dir:\n            preserve_root = Path(preserve_dir)\n            preserve_root.mkdir(parents=True, exist_ok=True)\n            preserved_target = preserve_root / f"{model_id}-{model['target_stem']}{target_matches[0].suffix}"\n            shutil.copy2(target_matches[0], preserved_target)\n        put_url = str(payload.get("result_put_url") or "").strip()\n'''
-if old_target in text:
-    text = text.replace(old_target, new_target, 1)
-elif 'preserved_target = None' not in text:
-    raise RuntimeError('Could not add candidate preservation')
+# Preserve the selected target stem outside _run_candidate's temporary directory.
+if 'preserved_target = None' not in text:
+    marker = '        target_metrics = _candidate_audio_metrics(target_matches[0], source) if succeeded and target_matches else None\n'
+    if marker not in text:
+        raise RuntimeError('Could not locate candidate target metrics')
+    addition = marker + '''        preserved_target = None
+        preserve_dir = str(payload.get("preserve_dir") or "").strip()
+        if succeeded and target_matches and preserve_dir:
+            preserve_root = Path(preserve_dir)
+            preserve_root.mkdir(parents=True, exist_ok=True)
+            preserved_target = preserve_root / f"{model_id}-{model['target_stem']}{target_matches[0].suffix}"
+            shutil.copy2(target_matches[0], preserved_target)
+'''
+    text = text.replace(marker, addition, 1)
 
-old_return = '''            "target_metrics": target_metrics,\n            "archive_name": archive.name if archive else None,\n'''
-new_return = '''            "target_metrics": target_metrics,\n            "preserved_target": str(preserved_target) if preserved_target else None,\n            "archive_name": archive.name if archive else None,\n'''
-if old_return in text:
-    text = text.replace(old_return, new_return, 1)
-elif '"preserved_target":' not in text:
-    raise RuntimeError('Could not expose preserved target')
+if '"preserved_target": str(preserved_target)' not in text:
+    marker = '            "target_metrics": target_metrics,\n'
+    if marker not in text:
+        raise RuntimeError('Could not locate candidate return metrics')
+    text = text.replace(
+        marker,
+        marker + '            "preserved_target": str(preserved_target) if preserved_target else None,\n',
+        1,
+    )
 
+# Allow the current baseline runner to preserve piano and Other comparison stems.
 old_sig = 'def _run_bs_baseline(audio_url: str, timeout_seconds: int = 1800) -> dict:'
 new_sig = 'def _run_bs_baseline(audio_url: str, timeout_seconds: int = 1800, preserve_dir: str | None = None) -> dict:'
 if old_sig in text:
@@ -27,15 +42,33 @@ if old_sig in text:
 elif new_sig not in text:
     raise RuntimeError('Could not extend baseline signature')
 
-old_base_return = '''        return {\n            "ok": completed.returncode == 0 and bool(piano_matches) and bool(other_matches),\n            "return_code": completed.returncode,\n'''
-new_base_return = '''        preserved = {}\n        if preserve_dir:\n            preserve_root = Path(preserve_dir)\n            preserve_root.mkdir(parents=True, exist_ok=True)\n            if piano_matches:\n                dest = preserve_root / f"current-bs-roformer-sw-piano{piano_matches[0].suffix}"\n                shutil.copy2(piano_matches[0], dest)\n                preserved["piano"] = str(dest)\n            if other_matches:\n                dest = preserve_root / f"current-bs-roformer-sw-other{other_matches[0].suffix}"\n                shutil.copy2(other_matches[0], dest)\n                preserved["other"] = str(dest)\n        return {\n            "ok": completed.returncode == 0 and bool(piano_matches) and bool(other_matches),\n            "return_code": completed.returncode,\n            "preserved": preserved,\n'''
-if old_base_return in text:
-    text = text.replace(old_base_return, new_base_return, 1)
-elif '"preserved": preserved' not in text:
-    raise RuntimeError('Could not add baseline preservation')
+if '            "preserved": preserved,\n' not in text:
+    marker = '        return {\n            "ok": completed.returncode == 0 and bool(piano_matches) and bool(other_matches),\n'
+    if marker not in text:
+        raise RuntimeError('Could not locate baseline return block')
+    preservation = '''        preserved = {}
+        if preserve_dir:
+            preserve_root = Path(preserve_dir)
+            preserve_root.mkdir(parents=True, exist_ok=True)
+            if piano_matches:
+                dest = preserve_root / f"current-bs-roformer-sw-piano{piano_matches[0].suffix}"
+                shutil.copy2(piano_matches[0], dest)
+                preserved["piano"] = str(dest)
+            if other_matches:
+                dest = preserve_root / f"current-bs-roformer-sw-other{other_matches[0].suffix}"
+                shutil.copy2(other_matches[0], dest)
+                preserved["other"] = str(dest)
+'''
+    text = text.replace(marker, preservation + marker, 1)
+    return_code_marker = '            "return_code": completed.returncode,\n'
+    if return_code_marker not in text:
+        raise RuntimeError('Could not expose preserved baseline files')
+    text = text.replace(return_code_marker, return_code_marker + '            "preserved": preserved,\n', 1)
 
-marker = '\n\ndef build_mss_candidate_lab(payload: dict, progress=None) -> dict:\n'
-helper = '''\n\ndef _run_listening_pack(payload: dict, progress=None) -> dict:
+builder_marker = '\n\ndef build_mss_candidate_lab(payload: dict, progress=None) -> dict:\n'
+helper = '''
+
+def _run_listening_pack(payload: dict, progress=None) -> dict:
     audio_url = str(payload.get("audio_url") or payload.get("source_url") or "").strip()
     if not audio_url:
         return {"ok": False, "mode": "mss_candidate_lab", "action": "listening_pack", "error": "audio_url is required"}
@@ -111,16 +144,16 @@ helper = '''\n\ndef _run_listening_pack(payload: dict, progress=None) -> dict:
         }
 '''
 if 'def _run_listening_pack(' not in text:
-    if marker not in text:
+    if builder_marker not in text:
         raise RuntimeError('Could not locate lab builder')
-    text = text.replace(marker, helper + marker, 1)
+    text = text.replace(builder_marker, helper + builder_marker, 1)
 
-route = '''    if action == "campaign":\n        return _run_campaign(payload, progress=progress)\n'''
-new_route = route + '''    if action == "listening_pack":\n        return _run_listening_pack(payload, progress=progress)\n'''
-if route in text and 'if action == "listening_pack"' not in text:
-    text = text.replace(route, new_route, 1)
-elif 'if action == "listening_pack"' not in text:
-    raise RuntimeError('Could not add listening pack route')
+if 'if action == "listening_pack"' not in text:
+    unsupported_marker = '    return {"ok": False, "mode": "mss_candidate_lab", "error": f"Unsupported action: {action}"}\n'
+    if unsupported_marker not in text:
+        raise RuntimeError('Could not locate unsupported-action return')
+    route = '    if action == "listening_pack":\n        return _run_listening_pack(payload, progress=progress)\n'
+    text = text.replace(unsupported_marker, route + unsupported_marker, 1)
 
 path.write_text(text, encoding='utf-8')
 print('MSS finalist listening pack patch applied')
