@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -12,9 +13,11 @@ import soundfile as sf
 
 from sw_residual_allocator import _download, _resolve_model_files
 
-DRUMSEP_CONFIG_URL = "https://github.com/jarredou/models/releases/download/DrumSep/config_mdx23c.yaml"
-DRUMSEP_CHECKPOINT_URL = "https://github.com/jarredou/models/releases/download/DrumSep/drumsep_5stems_mdx23c_jarredou.ckpt"
-CHILDREN = ("kick", "snare", "toms", "hh", "cymbals")
+DRUMSEP_CONFIG_URL = "https://github.com/openmirlab/mdxnet-infer/releases/download/weights-drumsep-v1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+DRUMSEP_CHECKPOINT_URL = "https://github.com/openmirlab/mdxnet-infer/releases/download/weights-drumsep-v1/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+DRUMSEP_CONFIG_SHA256 = "17d1649a227f841165bdb4c11a42082898192a1ea3ceab7e7e0b9293d6589dd6"
+DRUMSEP_CHECKPOINT_SHA256 = "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0"
+CHILDREN = ("kick", "snare", "toms", "hh", "ride", "crash")
 
 
 def _read(path: Path) -> tuple[np.ndarray, int]:
@@ -44,22 +47,48 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(x, y) / denom)
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _ensure_verified(url: str, path: Path, expected_sha256: str, progress=None, progress_message: str = "Downloading model") -> bool:
+    if path.is_file() and _sha256(path) == expected_sha256:
+        return False
+    if path.exists():
+        path.unlink()
+    if progress:
+        progress(progress_message, 5)
+    _download(url, path)
+    actual = _sha256(path)
+    if actual != expected_sha256:
+        path.unlink(missing_ok=True)
+        raise RuntimeError(f"Checksum mismatch for {path.name}: expected {expected_sha256}, got {actual}")
+    return True
+
+
 def _ensure_drumsep(model_dir: Path, progress=None) -> tuple[Path, Path, bool]:
     model_dir.mkdir(parents=True, exist_ok=True)
-    config = model_dir / "config_mdx23c.yaml"
-    checkpoint = model_dir / "drumsep_5stems_mdx23c_jarredou.ckpt"
-    installed = False
-    if not config.is_file():
-        if progress:
-            progress("Downloading DrumSep configuration", 5)
-        _download(DRUMSEP_CONFIG_URL, config)
-        installed = True
-    if not checkpoint.is_file():
-        if progress:
-            progress("Downloading DrumSep checkpoint", 8)
-        _download(DRUMSEP_CHECKPOINT_URL, checkpoint)
-        installed = True
-    return config, checkpoint, installed
+    config = model_dir / "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml"
+    checkpoint = model_dir / "aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt"
+    config_installed = _ensure_verified(
+        DRUMSEP_CONFIG_URL,
+        config,
+        DRUMSEP_CONFIG_SHA256,
+        progress=progress,
+        progress_message="Downloading verified DrumSep 6-stem configuration",
+    )
+    checkpoint_installed = _ensure_verified(
+        DRUMSEP_CHECKPOINT_URL,
+        checkpoint,
+        DRUMSEP_CHECKPOINT_SHA256,
+        progress=progress,
+        progress_message="Downloading verified DrumSep 6-stem checkpoint",
+    )
+    return config, checkpoint, bool(config_installed or checkpoint_installed)
 
 
 def build_drum_decomposition_v1(payload: dict, progress=None) -> dict:
@@ -133,7 +162,7 @@ def build_drum_decomposition_v1(payload: dict, progress=None) -> dict:
         sf.write(parent_path, parent_audio.astype(np.float32), parent_sr, subtype="FLOAT")
 
         if progress:
-            progress("Decomposing drums into five children", 48)
+            progress("Decomposing drums into six children", 48)
         command = [
             "python", str(repo_dir / "inference.py"),
             "--model_type", "mdx23c",
@@ -198,7 +227,7 @@ def build_drum_decomposition_v1(payload: dict, progress=None) -> dict:
             },
             "export_decision": {
                 "replace_parent_drums": replace_parent,
-                "if_passed": ["kick", "snare", "toms", "hh", "cymbals"],
+                "if_passed": list(CHILDREN),
                 "if_failed": ["drums"],
             },
         }
@@ -208,12 +237,12 @@ def build_drum_decomposition_v1(payload: dict, progress=None) -> dict:
         return {
             "ok": True,
             "mode": "drum_decomposition_v1",
-            "schema_version": 1,
+            "schema_version": 2,
             "research_only": True,
             "audio_url": audio_url,
-            "model": "DrumSep MDX23C 5-stem (jarredou)",
+            "model": "DrumSep MDX23C 6-stem (aufr33/jarredou; verified openmirlab mirror)",
             "sw_model_auto_installed": sw_installed,
             "drumsep_model_auto_installed": drum_installed,
             "report": report,
-            "warning": "Research validation only. Checkpoint licensing/commercial suitability must be resolved before production use.",
+            "warning": "Research validation only. Original DrumSep checkpoint license terms are not formally documented; do not assume commercial suitability.",
         }
