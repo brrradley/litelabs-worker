@@ -11,11 +11,9 @@ COPY litelabs_wind_brass_decomposition_v2_patch.py /app/litelabs_wind_brass_deco
 RUN python /app/litelabs_wind_brass_decomposition_v2_patch.py \
     && python -m py_compile /app/handler.py /app/wind_brass_decomposition_v2.py \
     && python - <<'PY'
-import inspect
 import sys
 from pathlib import Path
 sys.path.insert(0, '/app')
-import handler
 import wind_brass_decomposition_v2
 assert hasattr(wind_brass_decomposition_v2, 'build_wind_brass_decomposition_v2')
 assert wind_brass_decomposition_v2.TARGETS == ('saxophone', 'trumpet')
