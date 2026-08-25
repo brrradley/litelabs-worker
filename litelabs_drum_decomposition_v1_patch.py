@@ -18,4 +18,10 @@ if 'if mode == "drum_decomposition_v1"' not in text:
     text = text.replace(anchor, route, 1)
 
 path.write_text(text, encoding='utf-8')
-print('Drum decomposition v1 route applied')
+
+import sys
+sys.path.insert(0, '/app')
+import drum_decomposition_v1
+assert hasattr(drum_decomposition_v1, 'build_drum_decomposition_v1')
+assert drum_decomposition_v1.CHILDREN == ('kick', 'snare', 'toms', 'hh', 'cymbals')
+print('Drum decomposition v1 route and module self-test applied')
