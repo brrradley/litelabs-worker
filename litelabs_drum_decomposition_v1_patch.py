@@ -23,5 +23,5 @@ import sys
 sys.path.insert(0, '/app')
 import drum_decomposition_v1
 assert hasattr(drum_decomposition_v1, 'build_drum_decomposition_v1')
-assert drum_decomposition_v1.CHILDREN == ('kick', 'snare', 'toms', 'hh', 'cymbals')
-print('Drum decomposition v1 route and module self-test applied')
+assert drum_decomposition_v1.CHILDREN == ('kick', 'snare', 'toms', 'hh', 'ride', 'crash')
+print('Drum decomposition v1 route and 6-stem module self-test applied')
