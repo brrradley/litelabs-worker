@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LITELABS_MSS_REPO_DIR=/opt/music-source-separation-training \
     LITELABS_MSS_REPO_COMMIT=83d495dfc81b2ede9bc62f4209619f8bdfd14995 \
     LITELABS_MSS_MODEL_REGISTRY=/models/mss_training/model_registry.json \
-    LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.7-sw-ra
+    LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.8-inventory-v3
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libsamplerate0-dev git curl \
@@ -72,13 +72,15 @@ RUN python /app/litelabs_audio_separator_diagnostics_patch.py \
     && python /app/litelabs_mss_candidate_lab_patch.py \
     && python /app/mss_candidate_output_patch.py \
     && python /app/mss_baseline_benchmark_patch.py \
-    && python /app/mss_listening_pack_patch.py
+    && python /app/mss_listening_pack_patch.py \
+    && python /app/litelabs_instrument_inventory_v3_patch.py
 
 RUN python -m py_compile \
     /app/handler.py \
     /app/master_pack.py \
     /app/adaptive_recovery_run.py \
     /app/mss_candidate_lab.py \
+    /app/instrument_inventory_v3.py \
     /app/sw_residual_allocator.py
 
 RUN python - <<'PY'
@@ -88,6 +90,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, '/app')
 import mss_candidate_lab
+import instrument_inventory_v3
 import sw_residual_allocator
 
 inventory = mss_candidate_lab.build_mss_candidate_lab({'action': 'inventory'})
@@ -99,6 +102,8 @@ assert Path(os.environ['LITELABS_MSS_REPO_DIR'], 'inference.py').is_file()
 assert hasattr(mss_candidate_lab, '_run_listening_pack')
 source = inspect.getsource(mss_candidate_lab.build_mss_candidate_lab)
 assert 'action == "sw_ra"' in source
+assert 'action == "mega53_discovery"' in source
+assert hasattr(instrument_inventory_v3, 'build_instrument_inventory_v3')
 assert hasattr(sw_residual_allocator, 'build_sw_residual_allocator')
 print('research self-tests passed')
 PY
@@ -114,6 +119,7 @@ RUN test -f /app/benchmark_suite.py \
     && test -f /app/studio_mix_compatibility.py \
     && test -f /app/reference_free_stem_auditor.py \
     && test -f /app/instrument_wireframe.py \
+    && test -f /app/instrument_inventory_v3.py \
     && test -f /app/combined_recovery_planner.py \
     && test -f /app/track_profile.py \
     && test -f /app/sw_residual_allocator.py
