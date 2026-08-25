@@ -109,3 +109,7 @@ if routes:
 
 path.write_text(text, encoding='utf-8')
 print('MSS listening pack and SW RA routes applied')
+
+import runpy
+runpy.run_path('/app/mss_mega53_discovery_patch.py', run_name='__main__')
+print('Mega53 discovery route applied')
