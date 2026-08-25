@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LITELABS_MSS_REPO_DIR=/opt/music-source-separation-training \
     LITELABS_MSS_REPO_COMMIT=83d495dfc81b2ede9bc62f4209619f8bdfd14995 \
     LITELABS_MSS_MODEL_REGISTRY=/models/mss_training/model_registry.json \
-    LITELABS_RESEARCH_BUILD=mss-candidate-lab-2.9-drumsep-baked
+    LITELABS_RESEARCH_BUILD=mss-candidate-lab-3.0-wind-brass-v1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libsamplerate0-dev git curl \
@@ -31,7 +31,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
         einops \
         tqdm
 
-RUN mkdir -p /models/audio_separator /models/instrument_wireframe /models/mss_training /models/drumsep_mdx23c \
+RUN mkdir -p /models/audio_separator /models/instrument_wireframe /models/mss_training /models/drumsep_mdx23c /models/mss_training/mvsep-mega53 \
     && git clone https://github.com/ZFTurbo/Music-Source-Separation-Training.git ${LITELABS_MSS_REPO_DIR} \
     && cd ${LITELABS_MSS_REPO_DIR} \
     && git checkout ${LITELABS_MSS_REPO_COMMIT} \
@@ -64,6 +64,15 @@ RUN curl -fL --connect-timeout 30 --max-time 900 --retry 12 --retry-all-errors -
     -o /models/drumsep_mdx23c/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt \
     && echo "d2a4aa53eb584d21eead358a4e66d1882ad182911be018f052b5da73be9096d0  /models/drumsep_mdx23c/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt" | sha256sum -c -
 
+RUN curl -fL --connect-timeout 30 --max-time 900 --retry 12 --retry-all-errors --retry-delay 5 \
+    https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.21/mvsep_mega_model_bs_roformer_53_stems.yaml \
+    -o /models/mss_training/mvsep-mega53/config.yaml \
+    && echo "7e198062a251587088adb91215a4f44ab59e67bd62fcc805cf54d6e7dfc51103  /models/mss_training/mvsep-mega53/config.yaml" | sha256sum -c - \
+    && curl -fL --connect-timeout 30 --max-time 2400 --retry 12 --retry-all-errors --retry-delay 5 \
+    https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.21/mvsep_mega_model_bs_roformer_53_stems_v1.ckpt \
+    -o /models/mss_training/mvsep-mega53/model.ckpt \
+    && echo "c62820893bbf86d4e734f966bd142d9157cfc8bb8e79e9d8f9ea553f3ff3519f  /models/mss_training/mvsep-mega53/model.ckpt" | sha256sum -c -
+
 RUN cd ${LITELABS_MSS_REPO_DIR} \
     && python -c "import inference; print('MSS inference imports successfully')"
 
@@ -82,7 +91,8 @@ RUN python /app/litelabs_audio_separator_diagnostics_patch.py \
     && python /app/mss_candidate_output_patch.py \
     && python /app/mss_baseline_benchmark_patch.py \
     && python /app/mss_listening_pack_patch.py \
-    && python /app/litelabs_instrument_inventory_v3_patch.py
+    && python /app/litelabs_instrument_inventory_v3_patch.py \
+    && python /app/litelabs_wind_brass_decomposition_v1_patch.py
 
 RUN python -m py_compile \
     /app/handler.py \
@@ -91,6 +101,7 @@ RUN python -m py_compile \
     /app/mss_candidate_lab.py \
     /app/instrument_inventory_v3.py \
     /app/drum_decomposition_v1.py \
+    /app/wind_brass_decomposition_v1.py \
     /app/sw_residual_allocator.py
 
 RUN python - <<'PY'
@@ -102,6 +113,7 @@ sys.path.insert(0, '/app')
 import mss_candidate_lab
 import instrument_inventory_v3
 import drum_decomposition_v1
+import wind_brass_decomposition_v1
 import sw_residual_allocator
 
 inventory = mss_candidate_lab.build_mss_candidate_lab({'action': 'inventory'})
@@ -117,9 +129,12 @@ assert 'action == "mega53_discovery"' in source
 assert hasattr(instrument_inventory_v3, 'build_instrument_inventory_v3')
 assert hasattr(drum_decomposition_v1, 'build_drum_decomposition_v1')
 assert drum_decomposition_v1.CHILDREN == ('kick', 'snare', 'toms', 'hh', 'ride', 'crash')
+assert hasattr(wind_brass_decomposition_v1, 'build_wind_brass_decomposition_v1')
 assert hasattr(sw_residual_allocator, 'build_sw_residual_allocator')
 assert Path('/models/drumsep_mdx23c/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.yaml').is_file()
 assert Path('/models/drumsep_mdx23c/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt').is_file()
+assert Path('/models/mss_training/mvsep-mega53/config.yaml').is_file()
+assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
 print('research self-tests passed')
 PY
 
@@ -136,6 +151,7 @@ RUN test -f /app/benchmark_suite.py \
     && test -f /app/instrument_wireframe.py \
     && test -f /app/instrument_inventory_v3.py \
     && test -f /app/drum_decomposition_v1.py \
+    && test -f /app/wind_brass_decomposition_v1.py \
     && test -f /app/combined_recovery_planner.py \
     && test -f /app/track_profile.py \
     && test -f /app/sw_residual_allocator.py
