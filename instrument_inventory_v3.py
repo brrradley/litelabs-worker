@@ -25,7 +25,10 @@ FAMILIES = {
     "bass": {"bass", "double-bass"},
 }
 
-GENERIC_FAMILY_LABELS = {"drums", "guitar", "keys", "wind", "brass", "woodwind", "strings", "synth", "vocal", "bass"}
+# These labels only describe a family/container and should support specific identities,
+# not become automatic final exports themselves. Drums and bass are deliberately
+# excluded because they are actionable parent/canonical stems.
+SUPPORT_ONLY_GENERIC_LABELS = {"guitar", "keys", "wind", "brass", "woodwind", "strings", "synth", "vocal"}
 
 
 def _canon(name: str) -> str:
@@ -108,12 +111,27 @@ def _family_support(name: str, mega: dict[str, dict]) -> dict[str, Any]:
 
 
 def _verdict(name: str, mtg_item: dict | None, mega_item: dict | None, family_support: dict) -> tuple[str, str]:
+    canon = _canon(name)
+    family = _family(canon)
     mtg_strength = _mtg_strength(mtg_item)
     mega_strength = _mega_strength(mega_item)
     supported = bool(family_support.get("supported"))
 
+    # Mega53 is a discovery model and is known to miss genuine canonical material.
+    # Therefore its silence may veto a narrow subtype, but must not erase a strong
+    # MTG detection for actionable parent/canonical stems such as bass or drums.
     if mega_strength == "absent" and mtg_strength in {"strong", "moderate"}:
+        if canon in {"bass", "drums"}:
+            return "likely", "Strong MTG evidence retained because Mega53 silence cannot veto an actionable canonical stem"
         return "rejected", "MTG detection contradicted by an effectively absent Mega53 output"
+
+    # Guitar-family timbres are a known confusion case on this test material.
+    # Two broad discovery systems agreeing is not sufficient to auto-confirm a
+    # specific guitar subtype without a dedicated separation/listening check.
+    if family == "guitar" and canon != "guitar":
+        if mega_strength == "strong" and mtg_strength in {"strong", "moderate"}:
+            return "likely", "Both discovery systems indicate this guitar subtype, but guitar identity requires specialist verification"
+
     if mega_strength == "strong" and mtg_strength in {"strong", "moderate"}:
         return "confirmed", "MTG and Mega53 independently agree"
     if mega_strength == "strong" and mtg_strength == "weak" and supported:
@@ -130,13 +148,21 @@ def _verdict(name: str, mtg_item: dict | None, mega_item: dict | None, family_su
 
 
 def _route_action(name: str, verdict: str) -> str | None:
+    canon = _canon(name)
     if verdict not in {"confirmed", "likely"}:
         return None
-    canon = _canon(name)
     if canon == "drums":
         return "decompose_drums"
+    if canon == "bass":
+        return "preserve_bass"
     if canon in {"kick", "snare", "toms", "hh"}:
         return "drum_child_evidence"
+
+    # Automatic specialist extraction is intentionally conservative. A 'likely'
+    # narrow instrument remains evidence only until a specialist pass validates it.
+    if verdict != "confirmed":
+        return None
+
     if canon in {"saxophone", "trumpet", "trombone", "clarinet", "flute", "oboe", "bassoon", "french-horn", "tuba", "harmonica"}:
         return f"extract_{canon}"
     if canon in {"piano", "digital-piano", "organ", "keys"}:
@@ -165,7 +191,7 @@ def merge_instrument_evidence(mtg: dict, mega: dict) -> dict:
         decisions.append({
             "instrument": name,
             "family": family_support["family"],
-            "generic_family_label": name in GENERIC_FAMILY_LABELS,
+            "generic_family_label": name in SUPPORT_ONLY_GENERIC_LABELS,
             "verdict": verdict,
             "reason": reason,
             "route_action": action,
@@ -198,14 +224,16 @@ def merge_instrument_evidence(mtg: dict, mega: dict) -> dict:
     return {
         "ok": True,
         "mode": "instrument_inventory_v3",
-        "schema_version": 3,
+        "schema_version": 4,
         "research_only": True,
         "policy": {
             "mtg_is_evidence_not_truth": True,
             "mega53_is_evidence_not_ground_truth": True,
             "generic_family_labels_are_supporting_evidence_not_separate_exports": True,
-            "automatic_extraction_requires_confirmed_or_likely_verdict": True,
+            "narrow_specialist_auto_extraction_requires_confirmed_verdict": True,
+            "actionable_parent_stems_may_route_when_likely": True,
             "parent_stem_removed_only_after_verified_child_reconstruction": True,
+            "guitar_subtypes_require_specialist_verification": True,
         },
         "confirmed": specific_confirmed,
         "likely": likely,
