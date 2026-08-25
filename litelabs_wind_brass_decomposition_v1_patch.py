@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 path = Path('/app/handler.py')
 text = path.read_text(encoding='utf-8')
@@ -26,3 +27,6 @@ assert hasattr(wind_brass_decomposition_v1, 'build_wind_brass_decomposition_v1')
 assert 'saxophone' in wind_brass_decomposition_v1.SPECIFIC
 assert 'trumpet' in wind_brass_decomposition_v1.SPECIFIC
 print('Wind/brass decomposition v1 route and module self-test applied')
+
+runpy.run_path('/app/litelabs_wind_brass_decomposition_v2_patch.py', run_name='__main__')
+print('Wind/brass decomposition v2 route applied')
