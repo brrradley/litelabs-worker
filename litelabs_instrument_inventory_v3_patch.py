@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 path = Path('/app/handler.py')
 text = path.read_text(encoding='utf-8')
@@ -26,3 +27,6 @@ if 'if mode == "instrument_inventory_v3"' not in text:
 
 path.write_text(text, encoding='utf-8')
 print('Instrument Inventory v3 route applied')
+
+runpy.run_path('/app/litelabs_drum_decomposition_v1_patch.py', run_name='__main__')
+print('Drum decomposition v1 route applied')
