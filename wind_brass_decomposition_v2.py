@@ -25,7 +25,7 @@ def _read(path: Path):
 
 
 def _db(x: float) -> float:
-    return round(20.0 * np.log10(max(float(x), 1e-12)), 6)
+    return float(round(float(20.0 * np.log10(max(float(x), 1e-12))), 6))
 
 
 def _cos(a: np.ndarray, b: np.ndarray) -> float:
@@ -44,9 +44,19 @@ def _metrics(audio: np.ndarray, parent: np.ndarray) -> dict:
     return {
         'rms_dbfs': _db(rms),
         'peak_dbfs': _db(peak),
-        'active_ratio': round(active, 6),
-        'parent_cosine': round(_cos(audio, parent), 6),
+        'active_ratio': float(round(active, 6)),
+        'parent_cosine': float(round(_cos(audio, parent), 6)),
     }
+
+
+def _json_safe(value):
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def _tail(path: Path, lines: int = 120) -> str:
@@ -149,7 +159,7 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
     mark('model_setup', 'Resolving baked models', 2)
     t0 = time.monotonic()
     sw_config, sw_checkpoint, sw_installed = _resolve_model_files(Path(str(payload.get('model_dir') or '/models/bs_roformer_sw')), progress=progress)
-    stage_timings['model_setup'] = round(time.monotonic() - t0, 3)
+    stage_timings['model_setup'] = float(round(time.monotonic() - t0, 3))
 
     with tempfile.TemporaryDirectory(prefix='litelabs_wind_brass_v2_') as temp:
         root = Path(temp)
@@ -163,7 +173,7 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
             name = unquote(Path(urlparse(audio_url).path).name) or 'track.flac'
             downloaded = root / name
             _download(audio_url, downloaded)
-            stage_timings['download'] = round(time.monotonic() - t0, 3)
+            stage_timings['download'] = float(round(time.monotonic() - t0, 3))
 
             mark('convert', 'Converting source to stereo 44.1 kHz WAV', 8)
             t0 = time.monotonic()
@@ -177,7 +187,7 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
                     text=True,
                     timeout=300,
                 )
-            stage_timings['convert'] = round(time.monotonic() - t0, 3)
+            stage_timings['convert'] = float(round(time.monotonic() - t0, 3))
             if conv.returncode != 0:
                 return {'ok': False, 'mode': 'wind_brass_decomposition_v2', 'failed_stage': 'convert', 'runtime_log': _tail(conv_log), 'stage_timings': stage_timings}
 
@@ -194,7 +204,7 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
                 end_percent=42,
                 heartbeat_seconds=heartbeat_seconds,
             )
-            stage_timings['parent_separation'] = round(elapsed, 3)
+            stage_timings['parent_separation'] = float(round(elapsed, 3))
             if rc != 0:
                 return {'ok': False, 'mode': 'wind_brass_decomposition_v2', 'failed_stage': 'parent_separation', 'runtime_log': _tail(sw_log), 'stage_timings': stage_timings}
 
@@ -209,7 +219,7 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
             parent_audio, sr = _read(matches[0])
             parent_path = parentdir / 'other.wav'
             sf.write(parent_path, parent_audio.astype(np.float32), sr, subtype='FLOAT')
-            stage_timings['collect_parent'] = round(time.monotonic() - t0, 3)
+            stage_timings['collect_parent'] = float(round(time.monotonic() - t0, 3))
 
             mark('mega53', 'Starting Mega53 saxophone/trumpet separation', 48)
             mega_log = logdir / 'mega53.log'
@@ -229,7 +239,7 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
                 end_percent=88,
                 heartbeat_seconds=heartbeat_seconds,
             )
-            stage_timings['mega53'] = round(elapsed, 3)
+            stage_timings['mega53'] = float(round(elapsed, 3))
             if rc != 0:
                 return {'ok': False, 'mode': 'wind_brass_decomposition_v2', 'failed_stage': 'mega53', 'runtime_log': _tail(mega_log), 'stage_timings': stage_timings}
 
@@ -251,7 +261,7 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
 
             overlap = None
             if all(t in loaded for t in TARGETS):
-                overlap = round(_cos(loaded['saxophone'], loaded['trumpet']), 6)
+                overlap = float(round(_cos(loaded['saxophone'], loaded['trumpet']), 6))
 
             approved = []
             for item in evidence:
@@ -264,7 +274,7 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
                     reasons.append('weak_parent_relation')
                 if overlap is not None and abs(overlap) > overlap_gate:
                     reasons.append('pairwise_overlap_too_high')
-                item['approved'] = not reasons
+                item['approved'] = bool(not reasons)
                 item['rejection_reasons'] = reasons
                 if item['approved']:
                     approved.append(item['instrument'])
@@ -278,26 +288,26 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
                 residual_rms = float(np.sqrt(np.mean(residual * residual) + 1e-12))
                 residual_relative_db = _db(residual_rms / max(parent_rms, 1e-12))
                 residual_metrics = _metrics(residual, parent)
-                child_sum_cos = round(_cos(parent, child_sum), 6)
-                residual_is_meaningful = residual_relative_db >= residual_keep_gate
+                child_sum_cos = float(round(_cos(parent, child_sum), 6))
+                residual_is_meaningful = bool(residual_relative_db >= residual_keep_gate)
             else:
                 residual_relative_db = 0.0
                 residual_metrics = None
                 child_sum_cos = 0.0
                 residual_is_meaningful = True
 
-            partial_decomposition = bool(approved) and residual_is_meaningful
+            partial_decomposition = bool(bool(approved) and residual_is_meaningful)
             export = list(approved)
             if residual_is_meaningful:
                 export.append('other_residual')
-            stage_timings['analysis'] = round(time.monotonic() - t0, 3)
-            stage_timings['total'] = round(time.monotonic() - job_started, 3)
+            stage_timings['analysis'] = float(round(time.monotonic() - t0, 3))
+            stage_timings['total'] = float(round(time.monotonic() - job_started, 3))
 
             mark('complete', 'Wind/brass partial decomposition decision complete', 100)
-            return {
+            result = {
                 'ok': True,
                 'mode': 'wind_brass_decomposition_v2',
-                'schema_version': 3,
+                'schema_version': 4,
                 'research_only': True,
                 'audio_url': audio_url,
                 'parent': {**_metrics(parent_audio, parent_audio), 'source': 'BS-RoFormer-SW Other'},
@@ -307,7 +317,7 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
                 'residual': {
                     'relative_to_parent_db': residual_relative_db,
                     'metrics': residual_metrics,
-                    'meaningful': residual_is_meaningful,
+                    'meaningful': bool(residual_is_meaningful),
                 },
                 'diagnostics': {
                     'approved_children_sum_vs_parent_cosine': child_sum_cos,
@@ -319,31 +329,32 @@ def build_wind_brass_decomposition_v2(payload: dict, progress=None) -> dict:
                     'stage_timings': stage_timings,
                 },
                 'export_decision': {
-                    'partial_decomposition_passed': partial_decomposition,
-                    'drop_original_other_parent': partial_decomposition,
+                    'partial_decomposition_passed': bool(partial_decomposition),
+                    'drop_original_other_parent': bool(partial_decomposition),
                     'export': export if partial_decomposition else ['other'],
                     'policy': 'approved children plus meaningful residual; otherwise preserve original parent',
                 },
-                'sw_model_auto_installed': sw_installed,
+                'sw_model_auto_installed': bool(sw_installed),
                 'mega53_baked': True,
                 'warning': 'Mega53 remains research evidence. Promotion still requires listening and broader multi-track validation.'
             }
+            return _json_safe(result)
 
         except subprocess.TimeoutExpired as exc:
-            stage_timings['total'] = round(time.monotonic() - job_started, 3)
-            return {
+            stage_timings['total'] = float(round(time.monotonic() - job_started, 3))
+            return _json_safe({
                 'ok': False,
                 'mode': 'wind_brass_decomposition_v2',
                 'failed_stage': last_stage,
                 'error': f'internal subprocess timeout after {exc.timeout}s',
                 'stage_timings': stage_timings,
-            }
+            })
         except Exception as exc:
-            stage_timings['total'] = round(time.monotonic() - job_started, 3)
-            return {
+            stage_timings['total'] = float(round(time.monotonic() - job_started, 3))
+            return _json_safe({
                 'ok': False,
                 'mode': 'wind_brass_decomposition_v2',
                 'failed_stage': last_stage,
                 'error': repr(exc),
                 'stage_timings': stage_timings,
-            }
+            })
