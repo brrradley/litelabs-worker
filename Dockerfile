@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Verified routed runtime provides MSS, Mega53, DrumSep 6-stem and baked SW.
+# Verified routed runtime provides MSS, Mega53, DrumSep and baked SW.
 # Main is our real-world v3 beta test harness: clean BS-RoFormer parents stay
 # at ZIP root while candidate child stems are isolated in /experimental/.
 COPY master_pack.py /app/legacy_master_pack.py
@@ -20,9 +20,11 @@ COPY experimental_children_v1.py /app/experimental_children_v1.py
 COPY litelabs_experimental_main_patch.py /app/litelabs_experimental_main_patch.py
 COPY litelabs_family_first_patch.py /app/litelabs_family_first_patch.py
 COPY litelabs_quality_router_patch.py /app/litelabs_quality_router_patch.py
+COPY litelabs_progress_percent_patch.py /app/litelabs_progress_percent_patch.py
+COPY litelabs_v3_fast_router_vocals_patch.py /app/litelabs_v3_fast_router_vocals_patch.py
 
 # Candidate child-separation assets.
-RUN mkdir -p /models/drumsep_5stem /models/sax_demucs /models/audio_separator \
+RUN mkdir -p /models/drumsep_5stem /models/sax_demucs /models/audio_separator /models/karaoke_bs_roformer \
     && python - <<'PY'
 from pathlib import Path
 import hashlib
@@ -48,6 +50,16 @@ assets = [
         'https://huggingface.co/Blane187/all_public_uvr_models/resolve/main/17_HP-Wind_Inst-UVR.pth?download=true',
         Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth'),
         'acc6d472b4b478da9c9ab5af45b167749e05a7f65b30c7d5988b3700a513aeee',
+    ),
+    (
+        'https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/bs_roformer_karaoke_frazer_becruily.ckpt?download=true',
+        Path('/models/karaoke_bs_roformer/model.ckpt'),
+        'eb90ee24c1154d83fbcfd27e96182f19e061557cc6e4746953125e08c29389f9',
+    ),
+    (
+        'https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/config_karaoke_frazer_becruily.yaml?download=true',
+        Path('/models/karaoke_bs_roformer/config.yaml'),
+        None,
     ),
 ]
 for url, path, expected in assets:
@@ -88,7 +100,9 @@ RUN python /app/litelabs_live_patch.py \
     && python /app/litelabs_quality_status_patch.py \
     && python /app/litelabs_experimental_main_patch.py \
     && python /app/litelabs_family_first_patch.py \
+    && python /app/litelabs_progress_percent_patch.py \
     && python /app/litelabs_quality_router_patch.py \
+    && python /app/litelabs_v3_fast_router_vocals_patch.py \
     && python -m py_compile /app/handler.py /app/routed_extraction_v1.py /app/experimental_children_v1.py /app/drum_decomposition_v1.py /app/wind_brass_decomposition_v2.py /app/sw_residual_allocator.py \
     && python - <<'PY'
 import sys
@@ -100,11 +114,21 @@ assert master_pack.ENGINE_NAME == 'BS-RoFormer-SW'
 assert hasattr(experimental_children_v1, 'build_experimental_children_v1')
 source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
 assert 'common_export_gain' in source
+assert 'centers = (0.18, 0.50, 0.82)' in source
 assert 'Running Mega53 Instrument Inventory' in source
 assert 'family_route = ' in source
 assert 'DEMUCS3_PYTHON' in source
+assert 'KARAOKE_CHECKPOINT' in source
+assert '_lead_vocals.flac' in source
+assert '_backing_vocals.flac' in source
+assert '"drums": "percussion"' in source
+assert '"guitar": "strings"' in source
+assert '"piano": "keys"' in source
 assert '_write_readme(experimental' in source
 assert '(experimental / f"{track}_EXPERIMENTAL_REPORT.json")' in source
+progress_source = Path('/app/wind_brass_decomposition_v2.py').read_text(encoding='utf-8')
+assert "f'{stage_name} — {pct}%'" in progress_source
+assert 'elapsed:.0f}s elapsed' not in progress_source
 handler_source = Path('/app/handler.py').read_text(encoding='utf-8')
 assert 'experimental_children_v1' in handler_source
 assert Path('/opt/demucs3/bin/python').is_file()
@@ -113,12 +137,13 @@ assert Path('/models/drumsep_5stem/mdx23c_drumsep_5stem_aufr33_jarredou.ckpt').i
 assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
 assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
-print('LiteLABS v3 beta quality router image ready')
+assert Path('/models/karaoke_bs_roformer/model.ckpt').is_file()
+assert Path('/models/karaoke_bs_roformer/config.yaml').is_file()
+print('LiteLABS v3 beta fast adaptive child image ready')
 PY
 
 # Execute the real final handler startup path during the image build, but
 # replace RunPod's blocking serverless start call with a capture function.
-# This catches missing imports/startup errors before an image can be pushed.
 RUN python - <<'PY'
 import runpy
 import runpod.serverless
