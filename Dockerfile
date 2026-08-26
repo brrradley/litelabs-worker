@@ -22,6 +22,7 @@ COPY litelabs_family_first_patch.py /app/litelabs_family_first_patch.py
 COPY litelabs_quality_router_patch.py /app/litelabs_quality_router_patch.py
 COPY litelabs_progress_percent_patch.py /app/litelabs_progress_percent_patch.py
 COPY litelabs_v3_fast_router_vocals_patch.py /app/litelabs_v3_fast_router_vocals_patch.py
+COPY litelabs_v3_residual_inventory_fix_patch.py /app/litelabs_v3_residual_inventory_fix_patch.py
 
 # Candidate child-separation assets.
 RUN mkdir -p /models/drumsep_5stem /models/sax_demucs /models/audio_separator /models/karaoke_bs_roformer \
@@ -103,6 +104,7 @@ RUN python /app/litelabs_live_patch.py \
     && python /app/litelabs_progress_percent_patch.py \
     && python /app/litelabs_quality_router_patch.py \
     && python /app/litelabs_v3_fast_router_vocals_patch.py \
+    && python /app/litelabs_v3_residual_inventory_fix_patch.py \
     && python -m py_compile /app/handler.py /app/routed_extraction_v1.py /app/experimental_children_v1.py /app/drum_decomposition_v1.py /app/wind_brass_decomposition_v2.py /app/sw_residual_allocator.py \
     && python - <<'PY'
 import sys
@@ -121,6 +123,10 @@ assert 'DEMUCS3_PYTHON' in source
 assert 'KARAOKE_CHECKPOINT' in source
 assert '_lead_vocals.flac' in source
 assert '_backing_vocals.flac' in source
+assert 'vocal_parent_minus_lead' in source
+assert 'Analysing Residual Instruments' in source
+assert 'residual_inventory' in source
+assert 'progress=progress' in source
 assert '"drums": "percussion"' in source
 assert '"guitar": "strings"' in source
 assert '"piano": "keys"' in source
@@ -139,7 +145,7 @@ assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
 assert Path('/models/karaoke_bs_roformer/model.ckpt').is_file()
 assert Path('/models/karaoke_bs_roformer/config.yaml').is_file()
-print('LiteLABS v3 beta fast adaptive child image ready')
+print('LiteLABS v3 beta residual-aware adaptive child image ready')
 PY
 
 # Execute the real final handler startup path during the image build, but
