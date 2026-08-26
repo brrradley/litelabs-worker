@@ -16,8 +16,10 @@ COPY master_pack.py /app/legacy_master_pack.py
 COPY master_pack_v2.py /app/master_pack.py
 COPY handler.py /app/handler.py
 COPY litelabs_live_patch.py /app/litelabs_live_patch.py
+COPY litelabs_quality_status_patch.py /app/litelabs_quality_status_patch.py
 
 RUN python /app/litelabs_live_patch.py \
+    && python /app/litelabs_quality_status_patch.py \
     && python -m py_compile /app/handler.py /app/routed_extraction_v1.py /app/drum_decomposition_v1.py /app/wind_brass_decomposition_v2.py /app/sw_residual_allocator.py \
     && python - <<'PY'
 import sys
@@ -27,6 +29,11 @@ import master_pack
 import routed_extraction_v1
 assert master_pack.ENGINE_NAME == 'BS-RoFormer-SW'
 assert hasattr(routed_extraction_v1, 'build_routed_extraction_v1')
+source = Path('/app/handler.py').read_text(encoding='utf-8')
+assert 'Initiating stem separation' in source
+assert 'Running DrumSep Decomposition' in source
+assert 'Running Mega53 Decomposition' in source
+assert 'allow_unvalidated_specialist_children' in source
 assert Path('/models/bs_roformer_sw/BS-Rofo-SW-Fixed.ckpt').is_file()
 assert Path('/models/drumsep_mdx23c/aufr33-jarredou_DrumSep_model_mdx23c_ep_141_sdr_10.8059.ckpt').is_file()
 assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
