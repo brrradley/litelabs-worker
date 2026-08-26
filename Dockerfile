@@ -4,7 +4,7 @@ ENV PYTHONUNBUFFERED=1 \
     STEMFORGE_MODEL_DIR=/models/bs_roformer_sw \
     LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator \
     LITELABS_ENGINE=LiteLABS-Experimental-Children \
-    LITELABS_RELEASE=2.2-test
+    LITELABS_RELEASE=3.0.0-beta
 
 WORKDIR /app
 
@@ -18,6 +18,7 @@ COPY litelabs_live_patch.py /app/litelabs_live_patch.py
 COPY litelabs_quality_status_patch.py /app/litelabs_quality_status_patch.py
 COPY experimental_children_v1.py /app/experimental_children_v1.py
 COPY litelabs_experimental_main_patch.py /app/litelabs_experimental_main_patch.py
+COPY litelabs_v3_beta_pack_patch.py /app/litelabs_v3_beta_pack_patch.py
 
 # Candidate child-separation assets.
 RUN mkdir -p /models/drumsep_5stem /models/sax_demucs /models/audio_separator \
@@ -70,6 +71,7 @@ PY
 RUN python /app/litelabs_live_patch.py \
     && python /app/litelabs_quality_status_patch.py \
     && python /app/litelabs_experimental_main_patch.py \
+    && python /app/litelabs_v3_beta_pack_patch.py \
     && python -m py_compile /app/handler.py /app/routed_extraction_v1.py /app/experimental_children_v1.py /app/drum_decomposition_v1.py /app/wind_brass_decomposition_v2.py /app/sw_residual_allocator.py \
     && python - <<'PY'
 import sys
@@ -82,13 +84,17 @@ assert master_pack.ENGINE_NAME == 'BS-RoFormer-SW'
 assert hasattr(experimental_children_v1, 'build_experimental_children_v1')
 assert experimental_children_v1.DRUM5 == ('kick', 'snare', 'toms', 'hh', 'cymbals')
 source = Path('/app/handler.py').read_text(encoding='utf-8')
+exp_source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
 assert 'experimental_children_v1' in source
 assert 'mode = str(payload.get("mode") or "experimental_children_v1").strip()' in source
+assert '_write_experimental_readme(experimental' in exp_source
+assert 'experimental / f"{track}_EXPERIMENTAL_REPORT.json"' in exp_source
+assert 'master_pack.write_litelabs_readme' in exp_source
 assert Path('/models/bs_roformer_sw/BS-Rofo-SW-Fixed.ckpt').is_file()
 assert Path('/models/drumsep_5stem/mdx23c_drumsep_5stem_aufr33_jarredou.ckpt').is_file()
 assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
-print('LiteLABS main experimental child test image ready')
+print('LiteLABS v3 beta experimental child test image ready')
 PY
 
 CMD ["python", "-u", "/app/handler.py"]
