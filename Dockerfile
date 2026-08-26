@@ -132,8 +132,9 @@ assert 'progress=progress' in source
 assert '"drums": "percussion"' in source
 assert '"guitar": "strings"' in source
 assert '"piano": "keys"' in source
-assert '"--vr_batch_size", "16"' in source
-assert '"--vr_window_size", "512"' in source
+assert '"--vr_batch_size", "32"' in source
+assert '"--vr_window_size", "1024"' in source
+assert '"--use_autocast"' in source
 assert '_write_readme(experimental' in source
 assert '(experimental / f"{track}_EXPERIMENTAL_REPORT.json")' in source
 progress_source = Path('/app/wind_brass_decomposition_v2.py').read_text(encoding='utf-8')
@@ -149,7 +150,7 @@ assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
 assert Path('/models/karaoke_bs_roformer/model.ckpt').is_file()
 assert Path('/models/karaoke_bs_roformer/config.yaml').is_file()
-print('LiteLABS v3 beta fast-wind residual-aware adaptive child image ready')
+print('LiteLABS v3 beta aggressive-fast-wind residual-aware adaptive child image ready')
 PY
 
 # Execute the real final handler startup path during the image build, but
