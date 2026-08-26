@@ -116,4 +116,28 @@ assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
 print('LiteLABS v3 beta quality router image ready')
 PY
 
+# Execute the real final handler startup path during the image build, but
+# replace RunPod's blocking serverless start call with a capture function.
+# This catches missing imports/startup errors before an image can be pushed.
+RUN python - <<'PY'
+import runpy
+import runpod.serverless
+
+captured = {}
+original_start = runpod.serverless.start
+
+def fake_start(config):
+    captured['config'] = config
+
+runpod.serverless.start = fake_start
+try:
+    runpy.run_path('/app/handler.py', run_name='__main__')
+finally:
+    runpod.serverless.start = original_start
+
+config = captured.get('config') or {}
+assert callable(config.get('handler')), 'handler.py did not register a callable RunPod handler'
+print('LiteLABS serverless boot smoke test passed')
+PY
+
 CMD ["python", "-u", "/app/handler.py"]
