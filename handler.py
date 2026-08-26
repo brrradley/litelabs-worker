@@ -175,14 +175,7 @@ def run_audio_separator(input_file: Path, output_dir: Path, model_filename: str,
     before = {p.resolve() for p in output_dir.rglob("*") if p.is_file()}
     model_dir = Path(os.getenv("LITELABS_AUDIO_SEPARATOR_MODEL_DIR", "/models/audio_separator"))
     model_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "audio-separator",
-        str(input_file),
-        "--model_filename", model_filename,
-        "--model_file_dir", str(model_dir),
-        "--output_dir", str(output_dir),
-        "--output_format", output_format.upper(),
-    ]
+    cmd = ["audio-separator", str(input_file), "--model_filename", model_filename, "--model_file_dir", str(model_dir), "--output_dir", str(output_dir), "--output_format", output_format.upper()]
     print("LiteLABS extra vocals RUN:", " ".join(cmd), flush=True)
     completed = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
     print(completed.stdout or "", flush=True)
@@ -211,7 +204,6 @@ def classify_extra_vocal_outputs(files: list[Path]) -> dict[str, Path]:
 
 def is_useful_extra_vocal(path: Path, min_score: float, min_active: float) -> tuple[bool, str]:
     import master_pack
-
     stats = master_pack.analyse_audio(path)
     score = float(stats.get("score", 0.0))
     active = float(stats.get("active_ratio", 0.0))
@@ -254,10 +246,8 @@ def append_readme_notes(readme: Path | None, included_notes: list[str], omitted_
 
 def add_extra_vocals(root: Path, files: list[Path], readme: Path | None, output_format: str) -> list[str]:
     import master_pack
-
     if not is_enabled(os.getenv("LITELABS_EXTRA_VOCALS")):
         return []
-
     changes: list[str] = []
     included_notes: list[str] = []
     omitted_notes: list[str] = []
@@ -265,20 +255,16 @@ def add_extra_vocals(root: Path, files: list[Path], readme: Path | None, output_
     vocal_file = next((p for p in files if "_vocals." in p.name.lower() and "lead" not in p.name.lower() and "backing" not in p.name.lower()), None)
     if not vocal_file or not vocal_file.exists():
         return []
-
     model_backing = os.getenv("LITELABS_BACKING_MODEL", "UVR-BVE-4B_SN-44100-1.pth")
     model_dry = os.getenv("LITELABS_DRY_MODEL", "deverb_bs_roformer_8_256dim_8depth.ckpt")
     temp_root = root / "__litelabs_extra_vocals"
     temp_root.mkdir(parents=True, exist_ok=True)
-
     output_index = next_stem_index([p for p in master_dir.iterdir() if p.is_file()])
-
     try:
         backing_outputs = run_audio_separator(vocal_file, temp_root / "backing", model_backing, output_format)
         classified = classify_extra_vocal_outputs(backing_outputs)
         lead_candidate = classified.get("lead")
         backing_candidate = classified.get("backing")
-
         if lead_candidate and lead_candidate.exists():
             useful, reason = is_useful_extra_vocal(lead_candidate, 0.28, 0.08)
             if useful:
@@ -289,7 +275,6 @@ def add_extra_vocals(root: Path, files: list[Path], readme: Path | None, output_
                 output_index += 1
             else:
                 omitted_notes.append(f"Lead Vocals — {reason}")
-
         if backing_candidate and backing_candidate.exists():
             useful, reason = is_useful_extra_vocal(backing_candidate, 0.24, 0.04)
             if useful:
@@ -302,36 +287,33 @@ def add_extra_vocals(root: Path, files: list[Path], readme: Path | None, output_
                 omitted_notes.append(f"Backing Vocals — {reason}")
         else:
             omitted_notes.append("Backing Vocals — model did not produce a confident backing vocal file")
-
-        dry_source = lead_candidate if lead_candidate and lead_candidate.exists() else vocal_file
-        dry_outputs = run_audio_separator(dry_source, temp_root / "dry", model_dry, output_format)
-        dry_candidate = classify_extra_vocal_outputs(dry_outputs).get("dry") or (dry_outputs[0] if dry_outputs else None)
+        dry_outputs = run_audio_separator(vocal_file, temp_root / "dry", model_dry, output_format)
+        dry_classified = classify_extra_vocal_outputs(dry_outputs)
+        dry_candidate = dry_classified.get("dry")
         if dry_candidate and dry_candidate.exists():
-            useful, reason = is_useful_extra_vocal(dry_candidate, 0.28, 0.08)
+            useful, reason = is_useful_extra_vocal(dry_candidate, 0.30, 0.08)
             if useful:
-                dest = master_dir / f"{output_index:02d}_{vocal_file.stem.replace('_vocals', '')}_lead_vocals_dry.{output_format}"
+                dest = master_dir / f"{output_index:02d}_{vocal_file.stem.replace('_vocals', '')}_dry_vocals.{output_format}"
                 master_pack.copy_or_convert_audio(dry_candidate, dest, output_format)
-                included_notes.append(f"{output_index:02d} Lead Vocals Dry")
-                changes.append("added Lead Vocals Dry")
-                output_index += 1
+                included_notes.append(f"{output_index:02d} Dry Vocals")
+                changes.append("added Dry Vocals")
             else:
-                omitted_notes.append(f"Lead Vocals Dry — {reason}")
+                omitted_notes.append(f"Dry Vocals — {reason}")
         else:
-            omitted_notes.append("Lead Vocals Dry — dereverb model did not produce a confident dry vocal file")
+            omitted_notes.append("Dry Vocals — model did not produce a confident dry vocal file")
     except Exception as exc:
-        print(f"LiteLABS extra vocal pass skipped: {exc}", flush=True)
-        omitted_notes.append("Extra vocal stems — experimental local vocal pass failed for this track")
-        changes.append("extra vocal pass skipped")
-
+        omitted_notes.append(f"Extra vocal stems — skipped ({exc})")
+        print(f"LiteLABS extra vocal separation skipped: {exc}", flush=True)
+    finally:
+        if temp_root.exists():
+            import shutil
+            shutil.rmtree(temp_root, ignore_errors=True)
     append_readme_notes(readme, included_notes, omitted_notes)
-    if included_notes or omitted_notes:
-        changes.append("extra vocal README notes updated")
     return changes
 
 
 def post_process_archive(archive_path: Path, source_features: dict, output_format: str = "flac") -> list[str]:
     import master_pack
-
     changes: list[str] = []
     genre_override, genre_reason = source_genre_override(source_features)
     with tempfile.TemporaryDirectory(prefix="litelabs_post_") as post_dir:
@@ -341,7 +323,6 @@ def post_process_archive(archive_path: Path, source_features: dict, output_forma
         files = [p for p in root.rglob("*") if p.is_file()]
         readme = next((p for p in files if p.name == "README.txt"), None)
         current_genre = read_detected_genre(readme)
-
         guitar_file = next((p for p in files if "_guitar." in p.name.lower()), None)
         synth_file = next((p for p in files if "_synth_strings_other." in p.name.lower()), None)
         drums_file = next((p for p in files if "_drums." in p.name.lower()), None)
@@ -356,7 +337,6 @@ def post_process_archive(archive_path: Path, source_features: dict, output_forma
         bass_score = float(bass_stats.get("score", 0.0))
         dominant_rock_guitar = guitar_score >= max(synth_score + 0.18, 0.66) and drums_score >= 0.44 and bass_score >= 0.30
         protect_rock = current_genre == "rock_band" and dominant_rock_guitar
-
         omitted_notes: list[str] = []
         sparse_hint = genre_reason == "sparse source profile"
         for stem_file in list(files):
@@ -380,7 +360,6 @@ def post_process_archive(archive_path: Path, source_features: dict, output_forma
                 stem_file.unlink(missing_ok=True)
                 omitted_notes.append(f"{label} — low activity / not useful enough for this pack")
                 changes.append(f"removed {label}")
-
         if readme and readme.exists():
             text = readme.read_text(encoding="utf-8", errors="replace")
             if dominant_rock_guitar:
@@ -401,11 +380,9 @@ def post_process_archive(archive_path: Path, source_features: dict, output_forma
                     text = text.replace("\n\nGenerated with care", "\n\nOmitted stems:\n\n" + "\n".join(omitted_notes) + "\n\nGenerated with care")
             readme.write_text(text, encoding="utf-8")
             changes.append("README updated")
-
         files = [p for p in root.rglob("*") if p.is_file()]
         extra_changes = add_extra_vocals(root, files, readme, output_format)
         changes.extend(extra_changes)
-
         if changes:
             rebuild_archive(root, archive_path)
     return changes
@@ -416,12 +393,36 @@ def handler(job: dict) -> dict:
     payload = job.get("input") or {}
 
     if payload.get("healthcheck") is True:
-        return {"ok": True, "status": "ready", "service": "litelabs-worker"}
+        return {"ok": True, "status": "ready", "service": "litelabs-worker", "default_mode": "routed_extraction_v1"}
 
     audio_url = payload.get("audio_url")
     if not audio_url:
         return {"ok": False, "error": "Missing required input.audio_url"}
 
+    result_put_url = payload.get("result_put_url")
+    result_public_url = payload.get("result_public_url")
+    progress_url = payload.get("progress_url")
+    progress_token = payload.get("progress_token")
+    progress_job_id = payload.get("progress_job_id")
+
+    def progress(message: str, percent: int) -> None:
+        post_progress(progress_url, progress_token, progress_job_id, message, percent)
+
+    mode = str(payload.get("mode") or "routed_extraction_v1").strip()
+    if mode == "routed_extraction_v1":
+        try:
+            from routed_extraction_v1 import build_routed_extraction_v1
+            result = build_routed_extraction_v1(payload, progress=progress)
+            if result.get("ok"):
+                result["production"] = True
+                result.pop("research_only", None)
+                result.pop("warning", None)
+            return result
+        except Exception as exc:
+            post_progress(progress_url, progress_token, progress_job_id, f"Worker error: {exc}", 100)
+            return {"ok": False, "mode": mode, "error": str(exc), "error_type": exc.__class__.__name__}
+
+    # Explicit legacy fallback for rollback/testing.
     patch_genre_routing()
     from master_pack import build_master_pack
 
@@ -435,14 +436,6 @@ def handler(job: dict) -> dict:
         output_format = "flac"
 
     model_dir = Path(payload.get("model_dir") or os.getenv("STEMFORGE_MODEL_DIR", "/models/bs_roformer_sw"))
-    result_put_url = payload.get("result_put_url")
-    result_public_url = payload.get("result_public_url")
-    progress_url = payload.get("progress_url")
-    progress_token = payload.get("progress_token")
-    progress_job_id = payload.get("progress_job_id")
-
-    def progress(message: str, percent: int) -> None:
-        post_progress(progress_url, progress_token, progress_job_id, message, percent)
 
     try:
         with tempfile.TemporaryDirectory(prefix="litelabs_") as temp_dir:
@@ -474,10 +467,10 @@ def handler(job: dict) -> dict:
                 uploaded = True
                 progress("Finalising download", 98)
 
-            return {"ok": True, "track": result["track"], "output_format": result.get("output_format", output_format), "archive_size_bytes": archive_size, "uploaded": uploaded, "result_url": result_public_url, "stems": result["stems"], "post_process_changes": post_changes, "source_features": source_features}
+            return {"ok": True, "mode": "master_pack", "track": result["track"], "output_format": result.get("output_format", output_format), "archive_size_bytes": archive_size, "uploaded": uploaded, "result_url": result_public_url, "stems": result["stems"], "post_process_changes": post_changes, "source_features": source_features}
     except Exception as exc:
         post_progress(progress_url, progress_token, progress_job_id, f"Worker error: {exc}", 100)
-        return {"ok": False, "error": str(exc), "error_type": exc.__class__.__name__}
+        return {"ok": False, "mode": "master_pack", "error": str(exc), "error_type": exc.__class__.__name__}
 
 
 print("LiteLABS handler ready", flush=True)
