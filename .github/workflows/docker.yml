@@ -10,12 +10,16 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: litelabs-main-docker
+  cancel-in-progress: true
+
 env:
   IMAGE_NAME: litelabs-worker
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Check out repository
