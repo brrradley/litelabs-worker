@@ -4,10 +4,11 @@ path = Path('/app/experimental_children_v1.py')
 text = path.read_text(encoding='utf-8')
 
 # Demucs LocalRepo indexes .th files by Path.stem, not by the filename including
-# the .th extension. Passing SAX_MODEL verbatim makes the CLI reject the model
-# before inference starts.
+# the .th extension. PyTorch 2.6 also defaults torch.load(weights_only=True),
+# which rejects the older Demucs v3 package. Launch through our narrow trusted
+# compatibility shim, used only for the pinned/checksum-verified sax model.
 old_sax_cmd = '[str(DEMUCS3_PYTHON), "-m", "demucs", "--repo", str(SAX_MODEL_DIR), "-n", SAX_MODEL, "-o", str(sax_out), str(sax_input)]'
-new_sax_cmd = '[str(DEMUCS3_PYTHON), "-m", "demucs", "--repo", str(SAX_MODEL_DIR), "-n", Path(SAX_MODEL).stem, "-o", str(sax_out), str(sax_input)]'
+new_sax_cmd = '[str(DEMUCS3_PYTHON), "/app/demucs3_legacy_loader.py", "--repo", str(SAX_MODEL_DIR), "-n", Path(SAX_MODEL).stem, "-o", str(sax_out), str(sax_input)]'
 if old_sax_cmd not in text:
     raise RuntimeError('Could not locate Demucs sax command')
 text = text.replace(old_sax_cmd, new_sax_cmd, 1)
@@ -53,4 +54,4 @@ if needle not in text:
 text = text.replace(needle, replacement, 1)
 
 path.write_text(text, encoding='utf-8')
-print('LiteLABS wind export validation and Demucs sax model-name fix applied')
+print('LiteLABS wind export validation and trusted Demucs sax loader fix applied')
