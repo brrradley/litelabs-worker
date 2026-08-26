@@ -69,14 +69,19 @@ for url, path, expected in assets:
 print('main experimental child candidate models baked')
 PY
 
-# The published saxophone checkpoint was exported for Demucs 3.0.6. Keep a
-# tiny isolated launcher that reuses the image's existing torch/audio deps.
+# The published saxophone checkpoint was exported for Demucs 3.0.6. Keep an
+# isolated launcher, reuse the image's CUDA-enabled torch/torchaudio, and add
+# only Demucs' minimal separation-time dependencies so the main stack is not
+# downgraded or replaced.
 RUN python -m venv --system-site-packages /opt/demucs3 \
     && /opt/demucs3/bin/pip install --no-deps 'demucs==3.0.6' \
+    && /opt/demucs3/bin/pip install 'dora-search' 'einops' 'julius>=0.2.3' 'lameenc>=1.2' 'openunmix' 'pyyaml' 'tqdm' \
     && /opt/demucs3/bin/python - <<'PY'
 import demucs
 from demucs.pretrained import get_model
+import dora
 print('Demucs v3 sax runtime ready:', demucs.__file__)
+print('Dora runtime ready:', dora.__file__)
 PY
 
 RUN python /app/litelabs_live_patch.py \
