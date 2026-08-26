@@ -19,6 +19,7 @@ env:
 
 jobs:
   build:
+    # Explicit runner pin to avoid the stalled ubuntu-latest queue seen during v3 beta builds.
     runs-on: ubuntu-24.04
 
     steps:
