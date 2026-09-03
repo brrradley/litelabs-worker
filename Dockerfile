@@ -23,7 +23,7 @@ RUN python /app/litelabs_wind_vr_fast_patch.py \
 from pathlib import Path
 import sys
 sys.path.insert(0, '/app')
-from preset_pack import PRESETS, PARENT_LABELS
+from preset_pack import PRESETS, PARENT_LABELS, preset_capabilities
 
 source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
 handler = Path('/app/handler.py').read_text(encoding='utf-8')
@@ -47,6 +47,13 @@ assert 'lead_vocals' in PRESETS['experimental'] and 'saxophone' in PRESETS['expe
 assert PARENT_LABELS['drums'] == 'percussion'
 assert PARENT_LABELS['guitar'] == 'strings'
 assert PARENT_LABELS['piano'] == 'keys'
+capabilities = preset_capabilities()
+assert capabilities['schema_version'] == 1
+assert [item['id'] for item in capabilities['presets']] == ['basic', 'core', 'experimental']
+assert capabilities['presets'][0]['stems'] == ['Instrumental', 'Vocals']
+assert capabilities['presets'][2]['stems'][-2:] == ['Wind / Brass', 'Saxophone']
+assert 'payload.get("capabilities") is True' in handler
+assert 'preset_capabilities' in handler
 assert 'preset in {"basic", "core"}' in handler
 assert 'preset not in {"basic", "core", "experimental"}' in handler
 assert '"presets": ["basic", "core", "experimental"]' in handler
