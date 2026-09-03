@@ -22,6 +22,48 @@ PRESETS = {
     ),
 }
 
+PRESET_LABELS = {
+    "basic": "Basic",
+    "core": "Core",
+    "experimental": "Experimental",
+}
+
+STEM_LABELS = {
+    "instrumental": "Instrumental",
+    "vocals": "Vocals",
+    "percussion": "Percussion",
+    "bass": "Bass",
+    "strings": "Strings",
+    "keys": "Keys",
+    "other": "Other",
+    "lead_vocals": "Lead Vocals",
+    "backing_vocals": "Backing Vocals",
+    "kick": "Kick",
+    "snare": "Snare",
+    "toms": "Toms",
+    "hi_hats": "Hi-Hats",
+    "cymbals": "Cymbals",
+    "wind_brass": "Wind / Brass",
+    "saxophone": "Saxophone",
+}
+
+
+def preset_capabilities() -> dict:
+    return {
+        "ok": True,
+        "service": "litelabs-worker",
+        "schema_version": 1,
+        "presets": [
+            {
+                "id": preset_id,
+                "label": PRESET_LABELS[preset_id],
+                "stems": [STEM_LABELS[stem] for stem in stems],
+            }
+            for preset_id, stems in PRESETS.items()
+        ],
+    }
+
+
 PARENT_LABELS = {
     "vocals": "vocals",
     "drums": "percussion",
