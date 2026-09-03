@@ -13,11 +13,13 @@ COPY litelabs_v3_child_export_fix_patch.py /app/litelabs_v3_child_export_fix_pat
 COPY demucs3_legacy_loader.py /app/demucs3_legacy_loader.py
 COPY preset_pack.py /app/preset_pack.py
 COPY litelabs_v3_presets_patch.py /app/litelabs_v3_presets_patch.py
+COPY litelabs_public_progress_branding_patch.py /app/litelabs_public_progress_branding_patch.py
 
 RUN python /app/litelabs_wind_vr_fast_patch.py \
     && python /app/litelabs_v3_inventory_recall_patch.py \
     && python /app/litelabs_v3_child_export_fix_patch.py \
     && python /app/litelabs_v3_presets_patch.py \
+    && python /app/litelabs_public_progress_branding_patch.py \
     && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/demucs3_legacy_loader.py /app/preset_pack.py \
     && python - <<'PY'
 from pathlib import Path
@@ -27,6 +29,7 @@ from preset_pack import PRESETS, PARENT_LABELS, preset_capabilities
 
 source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
 handler = Path('/app/handler.py').read_text(encoding='utf-8')
+preset_source = Path('/app/preset_pack.py').read_text(encoding='utf-8')
 assert '"--vr_batch_size", "8"' in source
 assert '"--vr_window_size", "1024"' in source
 assert '"--use_autocast"' in source
@@ -57,6 +60,26 @@ assert 'preset_capabilities' in handler
 assert 'preset in {"basic", "core"}' in handler
 assert 'preset not in {"basic", "core", "experimental"}' in handler
 assert '"presets": ["basic", "core", "experimental"]' in handler
+# Customer-facing progress must use LiteLABS product labels rather than model names.
+public_progress = handler + '\n' + source + '\n' + preset_source
+for label in (
+    'LiteLABS-RS Parent Separation',
+    'LiteLABS-DR Drum Decomposition',
+    'LiteLABS-VX Vocal Separation',
+    'LiteLABS-IR Instrument Analysis',
+    'LiteLABS-WB Wind/Brass Separation',
+    'LiteLABS-SX Saxophone Separation',
+):
+    assert label in public_progress
+for internal in (
+    'BS-RoFormer Parent Separation',
+    'DrumSep 5-Stem Decomposition',
+    'Lead/Backing Vocal Separation',
+    'Mega53 Instrument Inventory',
+    'Wind/Brass Family Separation',
+    'Saxophone Specialist Separation',
+):
+    assert internal not in public_progress
 assert Path('/models/drumsep_5stem/mdx23c_drumsep_5stem_aufr33_jarredou.ckpt').is_file()
 assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
 assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
