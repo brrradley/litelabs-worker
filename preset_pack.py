@@ -79,6 +79,7 @@ def build_parent_preset(payload: dict, progress=None) -> dict:
         emit("Preparing source audio", 6)
         source = srcdir / f"{track}.wav"
         import subprocess
+        t0 = time.monotonic()
         with (logs / "ffmpeg.log").open("w", encoding="utf-8") as log:
             conv = subprocess.run(
                 ["ffmpeg", "-y", "-i", str(downloaded), "-ar", "44100", "-ac", "2", str(source)],
