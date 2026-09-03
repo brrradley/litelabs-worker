@@ -11,14 +11,22 @@ COPY litelabs_wind_vr_fast_patch.py /app/litelabs_wind_vr_fast_patch.py
 COPY litelabs_v3_inventory_recall_patch.py /app/litelabs_v3_inventory_recall_patch.py
 COPY litelabs_v3_child_export_fix_patch.py /app/litelabs_v3_child_export_fix_patch.py
 COPY demucs3_legacy_loader.py /app/demucs3_legacy_loader.py
+COPY preset_pack.py /app/preset_pack.py
+COPY litelabs_v3_presets_patch.py /app/litelabs_v3_presets_patch.py
 
 RUN python /app/litelabs_wind_vr_fast_patch.py \
     && python /app/litelabs_v3_inventory_recall_patch.py \
     && python /app/litelabs_v3_child_export_fix_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/demucs3_legacy_loader.py \
+    && python /app/litelabs_v3_presets_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/demucs3_legacy_loader.py /app/preset_pack.py \
     && python - <<'PY'
 from pathlib import Path
+import sys
+sys.path.insert(0, '/app')
+from preset_pack import PRESETS, PARENT_LABELS
+
 source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
+handler = Path('/app/handler.py').read_text(encoding='utf-8')
 assert '"--vr_batch_size", "8"' in source
 assert '"--vr_window_size", "1024"' in source
 assert '"--use_autocast"' in source
@@ -33,12 +41,21 @@ assert 'wind_output_ok = False' in source
 assert '"output_validated": bool(wind_output_ok)' in source
 loader = Path('/app/demucs3_legacy_loader.py').read_text(encoding='utf-8')
 assert 'weights_only' in loader and 'False' in loader
+assert PRESETS['basic'] == ('instrumental', 'vocals')
+assert PRESETS['core'] == ('vocals', 'percussion', 'bass', 'strings', 'keys', 'other')
+assert 'lead_vocals' in PRESETS['experimental'] and 'saxophone' in PRESETS['experimental']
+assert PARENT_LABELS['drums'] == 'percussion'
+assert PARENT_LABELS['guitar'] == 'strings'
+assert PARENT_LABELS['piano'] == 'keys'
+assert 'preset in {"basic", "core"}' in handler
+assert 'preset not in {"basic", "core", "experimental"}' in handler
+assert '"presets": ["basic", "core", "experimental"]' in handler
 assert Path('/models/drumsep_5stem/mdx23c_drumsep_5stem_aufr33_jarredou.ckpt').is_file()
 assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
 assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
 assert Path('/models/karaoke_bs_roformer/model.ckpt').is_file()
-print('LiteLABS v3 beta A4500-safe wind + legacy sax compatibility image ready')
+print('LiteLABS v3 BASIC/CORE/EXPERIMENTAL preset image ready')
 PY
 
 # Execute the real final handler startup path, but intercept RunPod's blocking
