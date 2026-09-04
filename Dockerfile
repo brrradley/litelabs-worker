@@ -16,6 +16,7 @@ COPY litelabs_v3_presets_patch.py /app/litelabs_v3_presets_patch.py
 COPY litelabs_public_progress_branding_patch.py /app/litelabs_public_progress_branding_patch.py
 COPY qa_research.py /app/qa_research.py
 COPY litelabs_research_qa_patch.py /app/litelabs_research_qa_patch.py
+COPY litelabs_preset_readme_metadata_patch.py /app/litelabs_preset_readme_metadata_patch.py
 
 RUN python /app/litelabs_wind_vr_fast_patch.py \
     && python /app/litelabs_v3_inventory_recall_patch.py \
@@ -23,6 +24,7 @@ RUN python /app/litelabs_wind_vr_fast_patch.py \
     && python /app/litelabs_v3_presets_patch.py \
     && python /app/litelabs_public_progress_branding_patch.py \
     && python /app/litelabs_research_qa_patch.py \
+    && python /app/litelabs_preset_readme_metadata_patch.py \
     && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/demucs3_legacy_loader.py /app/preset_pack.py /app/qa_research.py \
     && python - <<'PY'
 from pathlib import Path
@@ -66,10 +68,19 @@ assert 'preset in {"basic", "core"}' in handler
 assert 'preset not in {"basic", "core", "experimental"}' in handler
 assert '"presets": ["basic", "core", "experimental"]' in handler
 # Preset README must retain useful track metadata from the pre-preset packs.
-assert 'Detected genre:' in preset_source
-assert 'Execution time:' in preset_source
-assert 'TRACK INFORMATION' in preset_source
-assert 'ABOUT THIS PACK' in preset_source
+for field in (
+    'Track:',
+    'Output format: FLAC',
+    'Stem pack size:',
+    'Elapsed time:',
+    'Detected genre:',
+    'Genre reason:',
+    'TRACK INFORMATION',
+    'ABOUT THIS PACK',
+):
+    assert field in preset_source
+assert 'stem_pack_size_bytes' in preset_source
+assert 'rebuild_archive()' in preset_source
 # Silent research QA must be generated for parent and experimental packs but
 # must not be written into the customer-facing preset report archive.
 assert QA_VERSION == 1
@@ -104,7 +115,7 @@ assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
 assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
 assert Path('/models/karaoke_bs_roformer/model.ckpt').is_file()
-print('LiteLABS v3 preset image with silent research QA ready')
+print('LiteLABS v3 preset image with silent research QA and full README metadata ready')
 PY
 
 # Execute the real final handler startup path, but intercept RunPod's blocking
