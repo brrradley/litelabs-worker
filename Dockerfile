@@ -60,6 +60,11 @@ assert 'preset_capabilities' in handler
 assert 'preset in {"basic", "core"}' in handler
 assert 'preset not in {"basic", "core", "experimental"}' in handler
 assert '"presets": ["basic", "core", "experimental"]' in handler
+# Preset README must retain useful track metadata from the pre-preset packs.
+assert 'Detected genre:' in preset_source
+assert 'Execution time:' in preset_source
+assert 'TRACK INFORMATION' in preset_source
+assert 'ABOUT THIS PACK' in preset_source
 # Customer-facing progress must use LiteLABS product labels rather than model names.
 public_progress = handler + '\n' + source + '\n' + preset_source
 for label in (
