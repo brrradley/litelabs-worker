@@ -78,6 +78,107 @@ def normalise_preset(value: object) -> str:
     return str(value or "").strip().lower()
 
 
+def _detect_parent_genre(stems: dict[str, Path], source: Path) -> tuple[str, str]:
+    """Reuse the established LiteLABS parent-stem heuristics for preset metadata."""
+    try:
+        import master_pack
+
+        stats = {name: master_pack.analyse_audio(path) for name, path in stems.items()}
+        score = lambda name: float((stats.get(name) or {}).get("score", 0.0))
+
+        vocals = score("vocals")
+        drums = score("drums")
+        bass = score("bass")
+        guitar = score("guitar")
+        piano = score("piano")
+        other = score("other")
+
+        strong_rhythm = drums >= 0.44 and bass >= 0.30
+        strong_vocal = vocals >= 0.45
+        strong_guitar = guitar >= 0.42
+        dominant_guitar = strong_guitar and guitar > max(other + 0.18, 0.66)
+        strong_piano = piano >= 0.42
+        strong_other = other >= 0.38
+
+        if strong_rhythm and dominant_guitar:
+            return "rock_band", "strong drums with dominant confident guitar activity"
+        if strong_rhythm and (strong_other or not strong_guitar or bass >= 0.42):
+            details = ["strong drums/bass"]
+            if strong_other:
+                details.append("active synth/other")
+            if strong_guitar and not dominant_guitar:
+                details.append("guitar appears secondary/sample-like")
+            return "electronic_dance", ", ".join(details)
+        if strong_piano and strong_vocal and drums < 0.42:
+            return "piano_vocal_or_pop_ballad", "confident piano/keys with strong vocal and lighter drums"
+        if strong_vocal and drums >= 0.35 and bass >= 0.25 and not dominant_guitar:
+            return "vocal_pop", "strong vocal with moderate rhythm section and no dominant guitar"
+        if strong_rhythm and not strong_vocal:
+            return "instrumental_or_dance", "strong drums/bass with weaker vocal presence"
+
+        original = master_pack.analyse_audio(source)
+        if strong_vocal and float(original.get("active_ratio", 0.0)) > 0.35 and drums < 0.30 and bass < 0.30:
+            return "acoustic_or_sparse", "strong vocal with low drum/bass activity"
+        return "mixed_or_unknown", "audio features did not strongly match a known route"
+    except Exception as exc:
+        print(f"LiteLABS preset genre analysis skipped: {exc}", flush=True)
+        return "mixed_or_unknown", "genre analysis unavailable"
+
+
+def _format_execution_time(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _write_readme(
+    path: Path,
+    *,
+    filename: str,
+    preset: str,
+    exported: list[str],
+    genre: str,
+    execution_seconds: float,
+) -> None:
+    included = "\n".join(f"- {name}" for name in sorted(exported))
+    path.write_text(
+        "LiteLABS Stem Extraction Tools\n"
+        "==============================\n\n"
+        "TRACK INFORMATION\n"
+        "-----------------\n"
+        f"Track: {filename}\n"
+        f"Pack: {PRESET_LABELS[preset]}\n"
+        "Output format: FLAC\n"
+        f"Detected genre: {genre}\n"
+        f"Execution time: {_format_execution_time(execution_seconds)}\n\n"
+        "INCLUDED STEMS\n"
+        "--------------\n"
+        f"{included}\n\n"
+        "ABOUT THIS PACK\n"
+        "---------------\n"
+        "This stem pack was created using LiteLABS Stem Extraction Tools.\n"
+        "AI source separation is not the same as access to the original multitrack session.\n"
+        "Depending on the source mix, some stems may contain bleed, shared ambience, effects\n"
+        "or elements that overlap with neighbouring stems. This is normal for source separation.\n\n"
+        "For best results, audition the stems together as well as in isolation before making\n"
+        "production decisions. Phase, mastering, source quality and the original arrangement can\n"
+        "all affect the apparent quality of an individual stem.\n\n"
+        "USAGE\n"
+        "-----\n"
+        "These files are supplied for use with LiteRECORDS/LiteLABS workflows. You remain\n"
+        "responsible for ensuring that your use of the source recording and extracted material\n"
+        "is permitted by the relevant rights holder and applicable law.\n\n"
+        "Stem Extraction Tools by LiteLABS\n"
+        "https://literecords.com/\n",
+        encoding="utf-8",
+    )
+
+
 def build_parent_preset(payload: dict, progress=None) -> dict:
     preset = normalise_preset(payload.get("preset"))
     if preset not in {"basic", "core"}:
@@ -110,7 +211,8 @@ def build_parent_preset(payload: dict, progress=None) -> dict:
             directory.mkdir(parents=True, exist_ok=True)
 
         raw_name = unquote(Path(urlparse(audio_url).path).name) or "track.flac"
-        track = _safe_name(Path(str(payload.get("filename") or raw_name)).stem)
+        supplied_filename = str(payload.get("filename") or raw_name)
+        track = _safe_name(Path(supplied_filename).stem)
         downloaded = root / raw_name
 
         emit("Initiating stem separation", 2)
@@ -148,6 +250,9 @@ def build_parent_preset(payload: dict, progress=None) -> dict:
         if missing:
             return {"ok": False, "preset": preset, "failed_stage": "collect_parents", "missing": missing}
 
+        genre, genre_reason = _detect_parent_genre(stems, source)
+        print(f"LiteLABS detected genre: {genre} ({genre_reason})", flush=True)
+
         exported: list[str] = []
         requested = PRESETS[preset]
 
@@ -171,23 +276,24 @@ def build_parent_preset(payload: dict, progress=None) -> dict:
                 _copy_as_flac(stems[source_stem], dest)
                 exported.append(dest.name)
 
-        readme = final / "README.txt"
-        readme.write_text(
-            "LiteLABS Stem Pack\n"
-            "==================\n\n"
-            f"Track: {track}\n"
-            f"Preset: {preset.upper()}\n"
-            "Output format: FLAC\n\n"
-            "Included stems:\n\n" + "\n".join(requested) + "\n\n"
-            "Stem Extraction Tools by LiteLABS\n",
-            encoding="utf-8",
+        execution_seconds = time.monotonic() - started
+        _write_readme(
+            final / "README.txt",
+            filename=supplied_filename,
+            preset=preset,
+            exported=exported,
+            genre=genre,
+            execution_seconds=execution_seconds,
         )
 
         report = {
-            "schema_version": 1,
+            "schema_version": 2,
             "preset": preset,
             "requested_stems": list(requested),
             "exported_files": sorted(exported),
+            "detected_genre": genre,
+            "genre_reason": genre_reason,
+            "execution_seconds": round(execution_seconds, 3),
             "specialist_separators_run": [],
             "sw_auto_installed": bool(sw_installed),
             "timings_seconds": timings,
@@ -226,6 +332,8 @@ def build_parent_preset(payload: dict, progress=None) -> dict:
             "result_url": payload.get("result_public_url"),
             "requested_stems": list(requested),
             "files": sorted(exported),
+            "detected_genre": genre,
+            "execution_seconds": round(execution_seconds, 3),
             "specialist_separators_run": [],
             "timings_seconds": timings,
         }
