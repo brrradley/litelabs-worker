@@ -14,22 +14,27 @@ COPY demucs3_legacy_loader.py /app/demucs3_legacy_loader.py
 COPY preset_pack.py /app/preset_pack.py
 COPY litelabs_v3_presets_patch.py /app/litelabs_v3_presets_patch.py
 COPY litelabs_public_progress_branding_patch.py /app/litelabs_public_progress_branding_patch.py
+COPY qa_research.py /app/qa_research.py
+COPY litelabs_research_qa_patch.py /app/litelabs_research_qa_patch.py
 
 RUN python /app/litelabs_wind_vr_fast_patch.py \
     && python /app/litelabs_v3_inventory_recall_patch.py \
     && python /app/litelabs_v3_child_export_fix_patch.py \
     && python /app/litelabs_v3_presets_patch.py \
     && python /app/litelabs_public_progress_branding_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/demucs3_legacy_loader.py /app/preset_pack.py \
+    && python /app/litelabs_research_qa_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/demucs3_legacy_loader.py /app/preset_pack.py /app/qa_research.py \
     && python - <<'PY'
 from pathlib import Path
 import sys
 sys.path.insert(0, '/app')
 from preset_pack import PRESETS, PARENT_LABELS, preset_capabilities
+from qa_research import QA_VERSION, build_research_qa
 
 source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
 handler = Path('/app/handler.py').read_text(encoding='utf-8')
 preset_source = Path('/app/preset_pack.py').read_text(encoding='utf-8')
+qa_source = Path('/app/qa_research.py').read_text(encoding='utf-8')
 assert '"--vr_batch_size", "8"' in source
 assert '"--vr_window_size", "1024"' in source
 assert '"--use_autocast"' in source
@@ -65,6 +70,15 @@ assert 'Detected genre:' in preset_source
 assert 'Execution time:' in preset_source
 assert 'TRACK INFORMATION' in preset_source
 assert 'ABOUT THIS PACK' in preset_source
+# Silent research QA must be generated for parent and experimental packs but
+# must not be written into the customer-facing preset report archive.
+assert QA_VERSION == 1
+assert 'score_type' in qa_source and 'heuristic_research_signal' in qa_source
+assert 'research_qa = build_research_qa(' in preset_source
+assert '"research_qa": research_qa' in preset_source
+assert 'research_qa = build_research_qa(' in source
+assert '"research_qa": research_qa' in source
+assert '"research_qa": research_qa' not in preset_source[preset_source.index('report = {'):preset_source.index('(final / f"{track}_PRESET_REPORT.json")')]
 # Customer-facing progress must use LiteLABS product labels rather than model names.
 public_progress = handler + '\n' + source + '\n' + preset_source
 for label in (
@@ -90,7 +104,7 @@ assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
 assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
 assert Path('/models/karaoke_bs_roformer/model.ckpt').is_file()
-print('LiteLABS v3 BASIC/CORE/EXPERIMENTAL preset image ready')
+print('LiteLABS v3 preset image with silent research QA ready')
 PY
 
 # Execute the real final handler startup path, but intercept RunPod's blocking
