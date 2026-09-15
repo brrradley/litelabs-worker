@@ -85,8 +85,10 @@ assert 'stem_pack_size_bytes' in preset_source
 assert 'rebuild_archive()' in preset_source
 # Silent research QA must be generated for parent and experimental packs but
 # must not be written into the customer-facing preset report archive.
-assert QA_VERSION == 1
-assert 'score_type' in qa_source and 'heuristic_research_signal' in qa_source
+assert QA_VERSION == 2
+assert 'heuristic_research_signal_v2' in qa_source
+assert 'peer_group_aware' in qa_source
+assert 'hard_quality_caps' in qa_source
 assert 'research_qa = build_research_qa(' in preset_source
 assert '"research_qa": research_qa' in preset_source
 assert 'research_qa = build_research_qa(' in source
@@ -124,7 +126,7 @@ assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
 assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
 assert Path('/models/karaoke_bs_roformer/model.ckpt').is_file()
-print('LiteLABS v3 preset image with long-job diagnostics ready')
+print('LiteLABS v3 preset image with QA v2 and long-job diagnostics ready')
 PY
 
 # Execute the real final handler startup path, but intercept RunPod's blocking
