@@ -6,7 +6,21 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-QA_VERSION = 1
+QA_VERSION = 2
+
+PARENT_STEMS = ("vocals", "percussion", "bass", "strings", "keys", "other")
+CHILD_GROUPS = {
+    "vocal_children": ("lead_vocals", "backing_vocals"),
+    "drum_children": ("kick", "snare", "toms", "hi_hats", "cymbals"),
+    "wind_children": ("wind_brass", "wind_brass_residual"),
+    "sax_children": ("saxophone", "sax_residual"),
+}
+GROUP_PARENT = {
+    "vocal_children": "vocals",
+    "drum_children": "percussion",
+    "wind_children": "other",
+    "sax_children": "wind_brass",
+}
 
 
 def _read(path: Path) -> tuple[np.ndarray, int]:
@@ -38,6 +52,22 @@ def _db(value: float) -> float:
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+def _sum_aligned(items: list[np.ndarray]) -> np.ndarray | None:
+    items = [item for item in items if item is not None and len(item) > 0]
+    if not items:
+        return None
+    n = min(len(item) for item in items)
+    if n <= 0:
+        return None
+    return np.sum(np.stack([item[:n] for item in items], axis=0), axis=0)
+
+
+def _similarity(a: np.ndarray | None, b: np.ndarray | None) -> float | None:
+    if a is None or b is None or len(a) <= 0 or len(b) <= 0:
+        return None
+    return _clamp01(abs(_cosine(a, b)))
 
 
 def _signal_metrics(audio: np.ndarray, sr: int) -> dict:
@@ -88,29 +118,75 @@ def _signal_metrics(audio: np.ndarray, sr: int) -> dict:
     }
 
 
-def _stem_score(metrics: dict, distinctness: float, reconstruction: float | None) -> tuple[float, dict]:
+def _stem_score(
+    metrics: dict,
+    distinctness: float,
+    reconstruction: float | None,
+    leakage_corr: float,
+) -> tuple[float, dict, list[str]]:
+    """Score one stem using v2 research heuristics.
+
+    V2 deliberately gives separation distinctness and useful signal most of the weight.
+    Reconstruction is a group/reference consistency check rather than a global free pass,
+    and technical health can no longer inflate an otherwise poor separation.
+    """
     rms_db = float(metrics.get("rms_dbfs", -120.0))
     active = float(metrics.get("active_ratio", 0.0))
     clipping = float(metrics.get("clipping_fraction", 0.0))
+
     activity_score = _clamp01((active - 0.02) / 0.48)
     level_score = _clamp01((rms_db + 55.0) / 35.0)
     useful_signal = 0.65 * activity_score + 0.35 * level_score
     technical_health = _clamp01(1.0 - min(1.0, clipping * 250.0))
     distinctness_score = _clamp01(distinctness)
     reconstruction_score = _clamp01(reconstruction) if reconstruction is not None else 0.75
+
     score = (
-        0.35 * reconstruction_score
-        + 0.25 * distinctness_score
-        + 0.20 * useful_signal
-        + 0.20 * technical_health
+        0.45 * distinctness_score
+        + 0.25 * useful_signal
+        + 0.20 * reconstruction_score
+        + 0.10 * technical_health
     )
+
+    cap_reasons: list[str] = []
+    cap = 1.0
+
+    # Near-empty stems can look perfectly "distinct" simply because there is almost
+    # nothing in them. They must not receive a high quality score.
+    if useful_signal <= 0.05:
+        cap = min(cap, 0.30)
+        cap_reasons.append("near-empty signal")
+    elif useful_signal < 0.10:
+        cap = min(cap, 0.40)
+        cap_reasons.append("very weak signal")
+    elif useful_signal < 0.20:
+        cap = min(cap, 0.70)
+        cap_reasons.append("weak/sparse signal")
+
+    # High peer correlation is the most useful bleed warning we have without studio
+    # ground truth. Hard caps stop reconstruction/technical-health scores masking it.
+    if leakage_corr > 0.75:
+        cap = min(cap, 0.45)
+        cap_reasons.append("very high peer bleed")
+    elif leakage_corr > 0.60:
+        cap = min(cap, 0.60)
+        cap_reasons.append("high peer bleed")
+
+    if distinctness_score < 0.25:
+        cap = min(cap, 0.45)
+        cap_reasons.append("very low separation distinctness")
+    elif distinctness_score < 0.40:
+        cap = min(cap, 0.60)
+        cap_reasons.append("low separation distinctness")
+
+    score = min(score, cap)
     components = {
         "reconstruction_integrity": round(reconstruction_score, 6),
         "separation_distinctness": round(distinctness_score, 6),
         "useful_signal": round(useful_signal, 6),
         "technical_health": round(technical_health, 6),
     }
-    return round(_clamp01(score), 6), components
+    return round(_clamp01(score), 6), components, cap_reasons
 
 
 def build_research_qa(
@@ -128,7 +204,12 @@ def build_research_qa(
     extra: dict | None = None,
     genre_reason: str = "",
 ) -> dict:
-    """Build a lightweight silent QA record for admin research."""
+    """Build a lightweight silent QA record for admin research.
+
+    V2 compares stems only with meaningful peers. Parent stems are compared with other
+    parent stems; drum/vocal/wind/sax children are compared with siblings. This avoids
+    the v1 error of mixing overlapping parent and child hierarchies into one leakage sum.
+    """
     source_audio, source_sr = _read(source)
     source_mono = _mono(source_audio)
 
@@ -141,39 +222,82 @@ def build_research_qa(
         loaded[stem] = _mono(audio)
         metrics[stem] = _signal_metrics(audio, sr)
 
-    reconstruction_cosine: float | None = None
-    if loaded:
-        n = min([len(source_mono)] + [len(v) for v in loaded.values()])
+    parent_arrays = [loaded[name] for name in PARENT_STEMS if name in loaded]
+    parent_sum = _sum_aligned(parent_arrays)
+    reconstruction_cosine = _similarity(source_mono, parent_sum)
+
+    group_reconstruction: dict[str, float | None] = {}
+    for group_name, members in CHILD_GROUPS.items():
+        children_sum = _sum_aligned([loaded[name] for name in members if name in loaded])
+        parent_name = GROUP_PARENT[group_name]
+        parent_audio = loaded.get(parent_name)
+        group_reconstruction[group_name] = _similarity(parent_audio, children_sum)
+
+    # Instrumental is derived from source minus vocals, so compare it with that target
+    # instead of the sum of every overlapping stem in an Experimental pack.
+    instrumental_reconstruction: float | None = None
+    if "instrumental" in loaded and "vocals" in loaded:
+        n = min(len(source_mono), len(loaded["vocals"]), len(loaded["instrumental"]))
         if n > 0:
-            summed = np.sum(np.stack([v[:n] for v in loaded.values()], axis=0), axis=0)
-            reconstruction_cosine = _clamp01(abs(_cosine(source_mono[:n], summed)))
+            instrumental_target = source_mono[:n] - loaded["vocals"][:n]
+            instrumental_reconstruction = _similarity(loaded["instrumental"][:n], instrumental_target)
+
+    stem_to_group: dict[str, str] = {}
+    for group_name, members in CHILD_GROUPS.items():
+        for member in members:
+            stem_to_group[member] = group_name
 
     stem_records: dict[str, dict] = {}
-    names = list(loaded)
-    for name in names:
-        target = loaded[name]
-        others = [loaded[other] for other in names if other != name]
-        if others:
-            n = min([len(target)] + [len(v) for v in others])
-            rest = np.sum(np.stack([v[:n] for v in others], axis=0), axis=0)
-            leakage_corr = abs(_cosine(target[:n], rest))
+    for name, target in loaded.items():
+        qa_group = "other"
+        reconstruction_reference = "fallback"
+
+        if name in PARENT_STEMS:
+            qa_group = "parent"
+            peers = [loaded[other] for other in PARENT_STEMS if other != name and other in loaded]
+            reconstruction = reconstruction_cosine
+            reconstruction_reference = "source_vs_parent_sum"
+        elif name == "instrumental":
+            qa_group = "derived_instrumental"
+            peers = [loaded["vocals"]] if "vocals" in loaded else []
+            reconstruction = instrumental_reconstruction
+            reconstruction_reference = "source_minus_vocals"
+        elif name in stem_to_group:
+            qa_group = stem_to_group[name]
+            members = CHILD_GROUPS[qa_group]
+            peers = [loaded[other] for other in members if other != name and other in loaded]
+            reconstruction = group_reconstruction.get(qa_group)
+            reconstruction_reference = f"children_sum_vs_{GROUP_PARENT[qa_group]}"
+        else:
+            peers = [loaded[other] for other in loaded if other != name]
+            reconstruction = reconstruction_cosine
+            reconstruction_reference = "source_vs_parent_sum"
+
+        rest = _sum_aligned(peers)
+        if rest is not None:
+            leakage_corr = abs(_cosine(target, rest))
             distinctness = _clamp01(1.0 - leakage_corr)
         else:
             leakage_corr = 0.0
             distinctness = 0.75
 
-        score, components = _stem_score(metrics[name], distinctness, reconstruction_cosine)
+        score, components, cap_reasons = _stem_score(
+            metrics[name], distinctness, reconstruction, leakage_corr
+        )
         stem_records[name] = {
             "model": model_by_stem.get(name, "unknown"),
             "score": score,
             "components": components,
             "metrics": metrics[name],
             "correlation_with_other_stems": round(leakage_corr, 6),
+            "qa_group": qa_group,
+            "reconstruction_reference": reconstruction_reference,
+            "score_cap_reasons": cap_reasons,
         }
 
     record = {
         "qa_version": QA_VERSION,
-        "score_type": "heuristic_research_signal",
+        "score_type": "heuristic_research_signal_v2",
         "ground_truth_available": False,
         "job_id": job_id,
         "filename": filename,
@@ -185,6 +309,18 @@ def build_research_qa(
         "preset": preset,
         "pipeline_revision": pipeline_revision,
         "reconstruction_cosine": round(reconstruction_cosine, 6) if reconstruction_cosine is not None else None,
+        "scoring_profile": {
+            "distinctness_weight": 0.45,
+            "useful_signal_weight": 0.25,
+            "reconstruction_weight": 0.20,
+            "technical_health_weight": 0.10,
+            "peer_group_aware": True,
+            "hard_quality_caps": True,
+        },
+        "group_reconstruction": {
+            key: round(value, 6) if value is not None else None
+            for key, value in group_reconstruction.items()
+        },
         "stems": stem_records,
     }
     if extra:
