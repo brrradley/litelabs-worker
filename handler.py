@@ -92,7 +92,7 @@ def load_ground_truth_builder():
 def handler(job: dict) -> dict:
     print("LiteLABS research job received", flush=True)
     payload = job.get("input") or {}
-    modes = ["system_info", "master_pack", "model_bakeoff", "benchmark_suite", "ground_truth_benchmark", "model_ground_truth_bakeoff", "cascade_ground_truth_bakeoff", "multi_case_ground_truth_bakeoff", "adaptive_research_campaign", "stem_pack_inventory", "stem_pack_compare", "studio_mix_compatibility", "vocal_residual_test", "audio_separator_discovery"]
+    modes = ["system_info", "master_pack", "model_bakeoff", "benchmark_suite", "ground_truth_benchmark", "model_ground_truth_bakeoff", "cascade_ground_truth_bakeoff", "multi_case_ground_truth_bakeoff", "adaptive_research_campaign", "multitrack_ground_truth_campaign", "stem_pack_inventory", "stem_pack_compare", "studio_mix_compatibility", "vocal_residual_test", "audio_separator_discovery"]
 
     if payload.get("healthcheck") is True:
         status = {}
@@ -102,6 +102,7 @@ def handler(job: dict) -> dict:
             "cascade_ground_truth_bakeoff": ("cascade_ground_truth_bakeoff", "build_cascade_ground_truth_bakeoff"),
             "multi_case_ground_truth_bakeoff": ("multi_case_ground_truth_bakeoff", "build_multi_case_ground_truth_bakeoff"),
             "adaptive_research_campaign": ("adaptive_research_campaign", "build_adaptive_research_campaign"),
+            "multitrack_ground_truth_campaign": ("multitrack_ground_truth_campaign", "build_multitrack_ground_truth_campaign"),
             "stem_pack_inventory": ("stem_pack_inventory", "build_stem_pack_inventory"),
             "stem_pack_compare": ("stem_pack_compare", "build_stem_pack_compare"),
             "studio_mix_compatibility": ("studio_mix_compatibility", "build_studio_mix_compatibility"),
@@ -149,6 +150,9 @@ def handler(job: dict) -> dict:
         if mode == "adaptive_research_campaign":
             from adaptive_research_campaign import build_adaptive_research_campaign
             return build_adaptive_research_campaign(payload, progress=progress)
+        if mode == "multitrack_ground_truth_campaign":
+            from multitrack_ground_truth_campaign import build_multitrack_ground_truth_campaign
+            return build_multitrack_ground_truth_campaign(payload, progress=progress)
         if mode == "stem_pack_inventory":
             from stem_pack_inventory import build_stem_pack_inventory
             return build_stem_pack_inventory(payload, progress=progress)
