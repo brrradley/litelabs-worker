@@ -12,6 +12,10 @@ def log(message: str) -> None:
     print(f"[LiteLABS research bootstrap] {message}", flush=True)
 
 
+def _truthy(name: str) -> bool:
+    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def main() -> None:
     log("starting")
     log(f"python: {sys.version}")
@@ -45,7 +49,7 @@ def main() -> None:
             traceback.print_exc()
             raise
 
-    for filename in ['handler.py', 'research_tools.py', 'master_pack.py', 'multitrack_ground_truth_campaign.py']:
+    for filename in ['handler.py', 'research_tools.py', 'master_pack.py', 'multitrack_ground_truth_campaign.py', 'research_campaign_cli.py']:
         path = app_dir / filename
         log(f"checking {path}: exists={path.exists()}")
         if not path.exists():
@@ -71,6 +75,23 @@ def main() -> None:
         log("runtime multitrack metadata self-test FAILED")
         traceback.print_exc()
         raise
+
+    if _truthy('LITELABS_RESEARCH_POD_MODE'):
+        log("dedicated Pod mode enabled; starting research campaign CLI")
+        try:
+            runpy.run_path('/app/research_campaign_cli.py', run_name='__main__')
+        except SystemExit as exc:
+            code = int(exc.code or 0)
+            if code:
+                log(f"research campaign CLI exited with status {code}")
+                raise
+            log("research campaign CLI completed")
+            return
+        except Exception:
+            log("research campaign CLI crashed")
+            traceback.print_exc()
+            raise
+        return
 
     log("starting /app/handler.py via runpy")
     try:
