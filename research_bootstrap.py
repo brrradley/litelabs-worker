@@ -23,18 +23,11 @@ def _pod_progress(message: str, percent: int) -> None:
 
 
 def _ensure_multitrack_metadata_guard(app_dir: Path) -> None:
-    """Make the AppleDouble filter part of the runtime source before import.
-
-    This is deliberately self-contained rather than trusting the historical patch
-    helper. Pod launches can inherit a source layer that predates the helper even
-    when the image tag itself is current. We patch the campaign source, compile it,
-    evict any stale module, and then import the exact file we just verified.
-    """
     path = app_dir / "multitrack_ground_truth_campaign.py"
     text = path.read_text(encoding="utf-8")
 
     helper_anchor = "def _track_category(name: str) -> str:\n"
-    helper = '''def _is_real_audio_file(path: Path, extensions: set[str]) -> bool:\n    # Ignore macOS AppleDouble resource-fork placeholders. They often carry\n    # audio-looking extensions but are metadata, not playable media.\n    if path.suffix.lower() not in extensions:\n        return False\n    if path.name.startswith("._"):\n        return False\n    if any(part == "__MACOSX" for part in path.parts):\n        return False\n    return True\n\n\n'''
+    helper = '''def _is_real_audio_file(path: Path, extensions: set[str]) -> bool:\n    if path.suffix.lower() not in extensions:\n        return False\n    if path.name.startswith("._"):\n        return False\n    if any(part == "__MACOSX" for part in path.parts):\n        return False\n    return True\n\n\n'''
 
     if "def _is_real_audio_file(" not in text:
         if helper_anchor not in text:
@@ -61,7 +54,7 @@ def _ensure_multitrack_metadata_guard(app_dir: Path) -> None:
     log("runtime multitrack source guard written and compiled")
 
 
-def _run_pod_campaign() -> None:
+def _run_separator_campaign() -> Path:
     from multitrack_ground_truth_campaign import build_multitrack_ground_truth_campaign
 
     zip_url = str(os.getenv("LITELABS_BENCHMARK_ZIP_URL", "")).strip()
@@ -114,13 +107,46 @@ def _run_pod_campaign() -> None:
         next_cursor = result.get("next_cursor")
         if next_cursor is None:
             log(f"Pod campaign complete in {snapshot['elapsed_seconds']}s")
-            return
+            return output
         cursor = int(next_cursor)
 
 
-def _hold_completed_pod() -> None:
+def _run_reconstruction_campaign() -> Path:
+    from mix_reconstruction_campaign import build_mix_reconstruction_campaign
+
+    zip_url = str(os.getenv("LITELABS_BENCHMARK_ZIP_URL", "")).strip()
+    if not zip_url:
+        raise RuntimeError("LITELABS_BENCHMARK_ZIP_URL is required in Pod mode")
+
+    output = Path(os.getenv("LITELABS_BENCHMARK_OUTPUT", "/workspace/litelabs-research/reconstruction_campaign.json"))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    artifact_dir = str(output.parent / "reconstruction")
+    master_filename = str(os.getenv("LITELABS_MASTER_FILENAME", "")).strip()
+
+    log(f"Reconstruction source: {zip_url}")
+    log(f"Reconstruction output: {output}")
+    started = time.monotonic()
+    payload = {
+        "zip_url": zip_url,
+        "artifact_dir": artifact_dir,
+    }
+    if master_filename:
+        payload["master_filename"] = master_filename
+        log(f"Explicit master filename: {master_filename}")
+
+    result = build_mix_reconstruction_campaign(payload, progress=_pod_progress)
+    result["elapsed_seconds"] = round(time.monotonic() - started, 3)
+    output.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    log(f"Reconstruction campaign written: {output}")
+    if not result.get("ok"):
+        raise RuntimeError(str(result.get("error") or "Reconstruction campaign failed"))
+    log(f"Reconstruction campaign complete in {result['elapsed_seconds']}s")
+    return output
+
+
+def _hold_completed_pod(result_path: Path) -> None:
     log("campaign complete; holding Pod open for result retrieval (it will NOT rerun)")
-    log("retrieve /workspace/litelabs-research/disturbia_campaign.json before stopping the Pod")
+    log(f"retrieve {result_path} before stopping the Pod")
     while True:
         time.sleep(3600)
 
@@ -150,7 +176,7 @@ def main() -> None:
         traceback.print_exc()
         raise
 
-    for filename in ['handler.py', 'research_tools.py', 'master_pack.py', 'multitrack_ground_truth_campaign.py']:
+    for filename in ['handler.py', 'research_tools.py', 'master_pack.py', 'multitrack_ground_truth_campaign.py', 'mix_reconstruction_campaign.py']:
         path = app_dir / filename
         log(f"checking {path}: exists={path.exists()}")
         if not path.exists():
@@ -179,9 +205,14 @@ def main() -> None:
 
     if _truthy('LITELABS_RESEARCH_POD_MODE'):
         log("dedicated Pod mode enabled")
+        task = str(os.getenv('LITELABS_RESEARCH_TASK', 'separator')).strip().lower()
+        log(f"Pod research task: {task}")
         try:
-            _run_pod_campaign()
-            _hold_completed_pod()
+            if task in {'reconstruct', 'reconstruction', 'calibrate', 'calibration'}:
+                result_path = _run_reconstruction_campaign()
+            else:
+                result_path = _run_separator_campaign()
+            _hold_completed_pod(result_path)
         except Exception:
             log("research Pod campaign crashed")
             traceback.print_exc()
