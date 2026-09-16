@@ -18,6 +18,7 @@ COPY qa_research.py /app/qa_research.py
 COPY litelabs_research_qa_patch.py /app/litelabs_research_qa_patch.py
 COPY litelabs_preset_readme_metadata_patch.py /app/litelabs_preset_readme_metadata_patch.py
 COPY litelabs_long_job_safety_patch.py /app/litelabs_long_job_safety_patch.py
+COPY litelabs_chunked_result_upload_patch.py /app/litelabs_chunked_result_upload_patch.py
 
 RUN python /app/litelabs_wind_vr_fast_patch.py \
     && python /app/litelabs_v3_inventory_recall_patch.py \
@@ -27,7 +28,8 @@ RUN python /app/litelabs_wind_vr_fast_patch.py \
     && python /app/litelabs_research_qa_patch.py \
     && python /app/litelabs_preset_readme_metadata_patch.py \
     && python /app/litelabs_long_job_safety_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/demucs3_legacy_loader.py /app/preset_pack.py /app/qa_research.py \
+    && python /app/litelabs_chunked_result_upload_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/demucs3_legacy_loader.py /app/preset_pack.py /app/qa_research.py /app/litelabs_chunked_result_upload_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import sys
@@ -101,6 +103,14 @@ for public_source in (source, preset_source):
     assert 'response.status_code == 413' in public_source
     assert '"error_code": "result_too_large"' in public_source
     assert '"failed_stage": "result_upload"' in public_source
+# Large result packs must support authenticated retry-safe chunk delivery so a
+# single reverse-proxy/PHP request-size ceiling cannot reject >1 GB archives.
+for public_source in (source, preset_source):
+    assert 'def _litelabs_upload_archive(' in public_source
+    assert 'result_upload_mode' in public_source
+    assert 'result_chunk_size_mb' in public_source
+    assert 'requests.post(' in public_source
+    assert 'Chunk receiver did not confirm final archive assembly' in public_source
 # Customer-facing progress must use LiteLABS product labels rather than model names.
 public_progress = handler + '\n' + source + '\n' + preset_source
 for label in (
@@ -126,7 +136,7 @@ assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
 assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
 assert Path('/models/karaoke_bs_roformer/model.ckpt').is_file()
-print('LiteLABS v3 preset image with QA v2 and long-job diagnostics ready')
+print('LiteLABS v3 preset image with QA v2, long-job diagnostics and chunked result uploads ready')
 PY
 
 # Execute the real final handler startup path, but intercept RunPod's blocking
