@@ -33,4 +33,4 @@ RUN test -f /app/benchmark_suite.py \
  && test -f /app/multitrack_ground_truth_campaign.py \
  && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, multitrack_ground_truth_campaign; print('research benchmark modules import ok')"
 
-CMD ["python", "-u", "/app/research_bootstrap.py"]
+CMD ["bash", "-lc", "python -u /app/research_bootstrap.py && echo '[LiteLABS research pod] campaign process finished; keeping Pod alive for result retrieval' && exec tail -f /dev/null"]
