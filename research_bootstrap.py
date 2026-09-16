@@ -118,6 +118,13 @@ def _run_pod_campaign() -> None:
         cursor = int(next_cursor)
 
 
+def _hold_completed_pod() -> None:
+    log("campaign complete; holding Pod open for result retrieval (it will NOT rerun)")
+    log("retrieve /workspace/litelabs-research/disturbia_campaign.json before stopping the Pod")
+    while True:
+        time.sleep(3600)
+
+
 def main() -> None:
     log("starting")
     log(f"python: {sys.version}")
@@ -174,11 +181,11 @@ def main() -> None:
         log("dedicated Pod mode enabled")
         try:
             _run_pod_campaign()
+            _hold_completed_pod()
         except Exception:
             log("research Pod campaign crashed")
             traceback.print_exc()
             raise
-        return
 
     log("starting /app/handler.py via runpy")
     try:
