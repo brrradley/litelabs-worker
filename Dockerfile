@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 ENV LITELABS_AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
-ENV LITELABS_RESEARCH_BUILD=adaptive-research-campaign-2
+ENV LITELABS_RESEARCH_BUILD=adaptive-research-campaign-3
 
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential pkg-config libsamplerate0-dev && rm -rf /var/lib/apt/lists/*
 
@@ -21,6 +21,7 @@ COPY cascade_ground_truth_bakeoff.py /app/cascade_ground_truth_bakeoff.py
 COPY multi_case_ground_truth_bakeoff.py /app/multi_case_ground_truth_bakeoff.py
 COPY adaptive_research_campaign.py /app/adaptive_research_campaign.py
 COPY multitrack_ground_truth_campaign.py /app/multitrack_ground_truth_campaign.py
+COPY mix_reconstruction_campaign.py /app/mix_reconstruction_campaign.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 COPY litelabs_audio_separator_diagnostics_patch.py /app/litelabs_audio_separator_diagnostics_patch.py
 RUN python /app/litelabs_audio_separator_diagnostics_patch.py
@@ -31,6 +32,7 @@ RUN test -f /app/benchmark_suite.py \
  && test -f /app/multi_case_ground_truth_bakeoff.py \
  && test -f /app/adaptive_research_campaign.py \
  && test -f /app/multitrack_ground_truth_campaign.py \
- && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, multitrack_ground_truth_campaign; print('research benchmark modules import ok')"
+ && test -f /app/mix_reconstruction_campaign.py \
+ && python -c "import sys; sys.path.insert(0, '/app'); import benchmark_suite, ground_truth_benchmark, model_ground_truth_bakeoff, cascade_ground_truth_bakeoff, multi_case_ground_truth_bakeoff, adaptive_research_campaign, multitrack_ground_truth_campaign, mix_reconstruction_campaign; print('research benchmark modules import ok')"
 
 CMD ["bash", "-lc", "python -u /app/research_bootstrap.py && echo '[LiteLABS research pod] campaign process finished; keeping Pod alive for result retrieval' && exec tail -f /dev/null"]
