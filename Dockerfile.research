@@ -5,6 +5,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Incremental research build: inherit the verified image carrying DrumSep,
 # Mega53, Essentia, MSS dependencies and the existing research modes.
+COPY handler.py /app/handler.py
+COPY research_bootstrap.py /app/research_bootstrap.py
+COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
+COPY multitrack_ground_truth_campaign.py /app/multitrack_ground_truth_campaign.py
+COPY litelabs_multitrack_macos_patch.py /app/litelabs_multitrack_macos_patch.py
 COPY wind_brass_decomposition_v2.py /app/wind_brass_decomposition_v2.py
 COPY litelabs_wind_brass_decomposition_v2_patch.py /app/litelabs_wind_brass_decomposition_v2_patch.py
 COPY routed_extraction_v1.py /app/routed_extraction_v1.py
@@ -138,24 +143,31 @@ for url, path, expected in assets:
 print('experimental child candidate models baked')
 PY
 
-RUN python /app/litelabs_wind_brass_decomposition_v2_patch.py \
+RUN python /app/litelabs_multitrack_macos_patch.py \
+    && python /app/litelabs_wind_brass_decomposition_v2_patch.py \
     && python /app/litelabs_routed_extraction_patch.py \
     && python /app/litelabs_experimental_children_patch.py \
-    && python -m py_compile /app/handler.py /app/wind_brass_decomposition_v2.py /app/routed_extraction_v1.py /app/experimental_children_v1.py \
+    && python -m py_compile /app/handler.py /app/research_bootstrap.py /app/ground_truth_benchmark.py /app/multitrack_ground_truth_campaign.py /app/wind_brass_decomposition_v2.py /app/routed_extraction_v1.py /app/experimental_children_v1.py \
     && python - <<'PY'
 import sys
 from pathlib import Path
 sys.path.insert(0, '/app')
 import experimental_children_v1
 import routed_extraction_v1
+import multitrack_ground_truth_campaign
 assert hasattr(experimental_children_v1, 'build_experimental_children_v1')
 assert experimental_children_v1.DRUM5 == ('kick', 'snare', 'toms', 'hh', 'cymbals')
+assert hasattr(multitrack_ground_truth_campaign, 'build_multitrack_ground_truth_campaign')
+assert hasattr(multitrack_ground_truth_campaign, '_is_real_audio_file')
+assert not multitrack_ground_truth_campaign._is_real_audio_file(Path('/tmp/__MACOSX/._fake.wav'), {'.wav'})
+assert multitrack_ground_truth_campaign._is_real_audio_file(Path('/tmp/real.wav'), {'.wav'})
 assert Path('/models/drumsep_5stem/mdx23c_drumsep_5stem_aufr33_jarredou.ckpt').is_file()
 assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
 assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
 source = Path('/app/handler.py').read_text(encoding='utf-8')
 assert 'experimental_children_v1' in source
-print('experimental child quality lab self-tests passed')
+assert 'multitrack_ground_truth_campaign' in source
+print('experimental child quality lab and multitrack campaign self-tests passed')
 PY
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
