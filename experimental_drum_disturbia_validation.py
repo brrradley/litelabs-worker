@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -16,7 +17,7 @@ import synthetic_ground_truth_campaign as sgt
 import experimental_drum_refinement_campaign as base
 from ground_truth_benchmark import _score
 
-MODE = "experimental_drum_disturbia_validation_v1"
+MODE = "experimental_drum_disturbia_validation_v2"
 CHILDREN = base.CHILDREN
 
 
@@ -30,11 +31,27 @@ def progress(message: str, percent: int) -> None:
 
 def child_category(name: str):
     n = base._safe_key(name)
-    if any(x in n for x in ["kick", "bd", "bass_drum"]):
+
+    # Disturbia uses abbreviated studio-track names (kik_01, sn_01) rather
+    # than the long-form names used by the first validator.  Treat claps as
+    # snare-family material because Experimental has no separate clap child;
+    # this mirrors the eventual user-facing snare/percussion grouping better.
+    if (
+        "kick" in n
+        or "bass_drum" in n
+        or re.search(r"(^|_)bd(?:_|$)", n)
+        or re.search(r"(^|_)kik\d*(?:_|$)", n)
+    ):
         return "kick", None
-    if any(x in n for x in ["snare", "snr"]):
-        return "snare", None
-    if any(x in n for x in ["tom", "floor_tom"]):
+    if (
+        "snare" in n
+        or re.search(r"(^|_)snr(?:_|$)", n)
+        or re.search(r"(^|_)sn(?:_|$)", n)
+        or "clap" in n
+    ):
+        note = "Clap track mapped to snare-family because Experimental has no separate clap child." if "clap" in n else None
+        return "snare", note
+    if "tom" in n or "floor_tom" in n:
         return "toms", None
     if any(x in n for x in ["hihat", "hi_hat", "hat", "hh", "open_hat", "closed_hat"]):
         return "hh", None
@@ -46,11 +63,14 @@ def child_category(name: str):
 def build_child_refs(tracks: dict[str, np.ndarray], work: Path, sr: int):
     grouped = defaultdict(list)
     members = defaultdict(list)
+    mapping_notes = []
     for name, audio in tracks.items():
-        child, _ = child_category(name)
+        child, note = child_category(name)
         if child:
             grouped[child].append(audio)
             members[child].append(name)
+            if note:
+                mapping_notes.append({"track": name, "mapped_child": child, "note": note})
     refs, stats = {}, {}
     for child in CHILDREN:
         if not grouped.get(child):
@@ -65,7 +85,7 @@ def build_child_refs(tracks: dict[str, np.ndarray], work: Path, sr: int):
             "members": members[child],
             "rms_dbfs": round(20.0 * np.log10(max(base._rms(audio), 1e-12)), 3),
         }
-    return refs, stats
+    return refs, stats, mapping_notes
 
 
 def group_scores(outputs: dict[str, np.ndarray], refs: dict[str, Path], sr: int) -> dict:
@@ -88,7 +108,7 @@ def group_scores(outputs: dict[str, np.ndarray], refs: dict[str, Path], sr: int)
 
 def run() -> dict:
     zip_url = str(os.getenv("LITELABS_BENCHMARK_ZIP_URL", "https://literecords.com/tmp/disturbia_test.zip")).strip()
-    output = Path(os.getenv("LITELABS_BENCHMARK_OUTPUT", "/workspace/litelabs-research/disturbia_experimental_drums.json"))
+    output = Path(os.getenv("LITELABS_BENCHMARK_OUTPUT", "/workspace/litelabs-research/disturbia_experimental_drums_v2.json"))
     output.parent.mkdir(parents=True, exist_ok=True)
     timeout = max(300, min(3300, int(os.getenv("LITELABS_BENCHMARK_MODEL_TIMEOUT", "1800"))))
     model_dir = Path(os.getenv("LITELABS_AUDIO_SEPARATOR_MODEL_DIR", "/models/audio_separator"))
@@ -110,7 +130,7 @@ def run() -> dict:
         integrity = sgt._reference_integrity(source_path, parent_refs, sr)
         if not integrity["exact_partition"]:
             raise RuntimeError(f"Synthetic reference integrity failed: {integrity}")
-        child_refs, child_stats = build_child_refs(tracks, work, sr)
+        child_refs, child_stats, mapping_notes = build_child_refs(tracks, work, sr)
         if not child_refs:
             raise RuntimeError("No drum child references found in Disturbia pack")
         log("child refs: " + ", ".join(f"{k}={child_stats[k]['members']}" for k in child_refs))
@@ -135,7 +155,7 @@ def run() -> dict:
 
         progress("Running current Experimental DrumSep once", 38)
         baseline, drumsep_elapsed, drumsep_tail = base._run_current_drumsep(parent, sr, root / "drumsep", timeout)
-        progress("Applying only the proven mild Wiener candidate", 70)
+        progress("Applying only the previously successful mild Wiener candidate", 70)
         refined = base._wiener_refine(parent, baseline, power=1.0, n_fft=2048, hop=512)
 
         baseline_score = base._score_candidate("baseline_current_5stem", baseline, child_refs, parent, sr)
@@ -157,6 +177,20 @@ def run() -> dict:
                 "preferred": "wiener_p1_fft2048" if rq > bq else "baseline_current_5stem",
             }
 
+        per_group_decision = {}
+        for group in ("snare_toms", "hats_cymbals"):
+            b = baseline_score["combined_group_scores"].get(group, {})
+            r = refined_score["combined_group_scores"].get(group, {})
+            bq, rq = b.get("quality_score"), r.get("quality_score")
+            if bq is None or rq is None:
+                continue
+            per_group_decision[group] = {
+                "baseline_quality": bq,
+                "refined_quality": rq,
+                "delta": round(rq - bq, 3),
+                "preferred": "wiener_p1_fft2048" if rq > bq else "baseline_current_5stem",
+            }
+
         result = {
             "ok": True,
             "mode": MODE,
@@ -166,14 +200,16 @@ def run() -> dict:
             "reference_integrity": integrity,
             "inventory": inventory,
             "child_reference_stats": child_stats,
+            "mapping_notes": mapping_notes,
             "bs_parent_elapsed_seconds": round(sw_elapsed, 3),
             "drumsep_elapsed_seconds": round(drumsep_elapsed, 3),
             "drumsep_runtime_tail": drumsep_tail,
             "candidates": [baseline_score, refined_score],
             "per_stem_decision": per_stem_decision,
+            "per_group_decision": per_group_decision,
             "future_grouping_note": {
-                "snare_toms": "Tracked now because these may be combined later.",
-                "hats_cymbals": "Tracked now because hi-hat and cymbals may be combined later.",
+                "snare_toms": "Tracked because these may be combined later.",
+                "hats_cymbals": "Tracked because hi-hat and cymbals may be combined later.",
             },
             "complete": True,
             "elapsed_seconds": round(time.monotonic() - started, 3),
