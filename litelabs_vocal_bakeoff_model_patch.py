@@ -18,7 +18,7 @@ def _run_current_set_karaoke(source: Path, output_dir: Path, timeout: int) -> tu
 
     The installed audio-separator build can run the MelBand Becruily candidate,
     but its model registry does not expose the frazer/becruily BS-RoFormer used
-    by SET production.  Production already runs that checkpoint through MSS,
+    by SET production. Production already runs that checkpoint through MSS,
     so the benchmark must do the same rather than relying on the registry.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -69,8 +69,10 @@ old = '''        set_lead, set_native_backing, set_elapsed, set_tail = _run_sepa
 new = '''        set_lead, set_native_backing, set_elapsed, set_tail = _run_current_set_karaoke(\n            sw_vocals_path, root / "set_karaoke", timeout\n        )'''
 if old in text:
     text = text.replace(old, new, 1)
-elif '_run_current_set_karaoke(' not in text[text.find('progress("Testing current SET'):]:]:
-    raise RuntimeError('Could not locate current SET karaoke invocation')
+else:
+    current_stage = text[text.find('progress("Testing current SET'):] if 'progress("Testing current SET' in text else text
+    if '_run_current_set_karaoke(' not in current_stage:
+        raise RuntimeError('Could not locate current SET karaoke invocation')
 
 path.write_text(text, encoding='utf-8')
 print('vocal bakeoff now uses exact current SET karaoke checkpoint through MSS')
