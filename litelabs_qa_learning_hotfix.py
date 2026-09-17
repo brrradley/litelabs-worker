@@ -25,15 +25,26 @@ if '    learning_observation = {\n' not in qa:
         raise RuntimeError('Could not locate QA record anchor')
     qa = qa.replace(record_anchor, learning_block + record_anchor, 1)
 
-field_anchor = '        "pipeline_revision": pipeline_revision,\n'
+# IMPORTANT: target the final record block, not the identically-named
+# pipeline_revision field inside learning_observation["recipe"]. The previous
+# broad replace inserted learning_observation into its own dict while it was
+# still being assigned, causing the exact UnboundLocalError seen in production.
+record_fields_anchor = (
+    '        "preset": preset,\n'
+    '        "pipeline_revision": pipeline_revision,\n'
+    '        "reconstruction_cosine": round(reconstruction_cosine, 6) if reconstruction_cosine is not None else None,\n'
+)
+record_fields_replacement = (
+    '        "preset": preset,\n'
+    '        "pipeline_revision": pipeline_revision,\n'
+    '        "source_metrics": source_metrics,\n'
+    '        "learning_observation": learning_observation,\n'
+    '        "reconstruction_cosine": round(reconstruction_cosine, 6) if reconstruction_cosine is not None else None,\n'
+)
 if '        "learning_observation": learning_observation,\n' not in qa:
-    if field_anchor not in qa:
-        raise RuntimeError('Could not locate QA learning field anchor')
-    qa = qa.replace(
-        field_anchor,
-        field_anchor + '        "source_metrics": source_metrics,\n        "learning_observation": learning_observation,\n',
-        1,
-    )
+    if record_fields_anchor not in qa:
+        raise RuntimeError('Could not locate final QA record fields anchor')
+    qa = qa.replace(record_fields_anchor, record_fields_replacement, 1)
 
 # Keep the silent QA hierarchy aligned with the production drum output. DrumSep
 # still predicts hh+cymbals internally, but the customer-facing child is hats.
@@ -63,6 +74,16 @@ exp_check = exp_path.read_text(encoding='utf-8')
 assert 'learning_observation = {' in qa_check
 assert '"learning_observation": learning_observation' in qa_check
 assert qa_check.index('learning_observation = {') < qa_check.index('"learning_observation": learning_observation')
+# Ensure the self-reference was NOT inserted inside the learning_observation
+# recipe itself.
+recipe_fragment = (
+    '        "recipe": {\n'
+    '            "preset": preset,\n'
+    '            "pipeline_revision": pipeline_revision,\n'
+    '            "models": model_families,\n'
+    '        },\n'
+)
+assert recipe_fragment in qa_check
 assert '"drum_children": ("kick", "snare", "toms", "hats")' in qa_check
 assert '"drums_5stem_hats" in lower' in exp_check
 print('LiteLABS QA learning observation + hats telemetry hotfix applied')
