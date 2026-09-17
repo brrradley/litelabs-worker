@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -28,12 +29,7 @@ def progress(message: str, percent: int) -> None:
 
 
 def track_category(name: str) -> str:
-    """Map arbitrary studio track names into the six production parent stems.
-
-    This is intentionally broader than the historical Disturbia mapper so packs
-    such as Shout (Vocals, Perc_Toms, Synth, Agogo_HiHat...) are classified into
-    the same parent taxonomy emitted by BS-Roformer-SW.
-    """
+    """Map arbitrary studio track names into the six production parent stems."""
     n = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
     tokens = set(n.split())
 
@@ -96,23 +92,183 @@ def _reference_integrity(source_path: Path, refs: dict[str, Path], sr: int) -> d
     }
 
 
-def _score_outputs(out: Path, refs: dict[str, Path], sr: int, work: Path) -> dict:
-    scores = {}
+def _rms(audio: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(audio.astype(np.float64) ** 2)) + 1e-15)
+
+
+def _reference_stats(source_path: Path, refs: dict[str, Path]) -> dict:
+    source, _ = mt._load(source_path)
+    source_rms = _rms(source)
+    result = {}
+    for target in TARGETS:
+        audio, _ = mt._load(refs[target])
+        rms = _rms(audio)
+        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+        result[target] = {
+            "rms": round(rms, 9),
+            "rms_dbfs": round(20.0 * np.log10(max(rms, 1e-15)), 3),
+            "peak": round(peak, 9),
+            "energy_ratio_vs_source": round((rms / source_rms) ** 2, 6),
+        }
+    return result
+
+
+def _mapping_warnings(inventory: list[dict]) -> list[dict]:
+    warnings = []
+    for item in inventory:
+        name = str(item.get("name") or "")
+        category = str(item.get("category") or "")
+        low = name.lower()
+        reason = None
+        if category == "piano" and any(x in low for x in ["synth", "arp", "organ", "keyboard", "keys"]):
+            reason = "Broad keys taxonomy: separator may route this source to piano or other."
+        elif category == "other":
+            reason = "Fallback taxonomy: track name does not identify a production parent stem unambiguously."
+        if reason:
+            warnings.append({"track": name, "mapped_category": category, "warning": reason})
+    return warnings
+
+
+def _audio_hash(audio: np.ndarray) -> str:
+    packed = np.asarray(audio, dtype="<f4", order="C")
+    return hashlib.sha256(packed.tobytes()).hexdigest()
+
+
+def _routing_correlation(estimate: np.ndarray, reference: np.ndarray, max_points: int = 240000) -> float:
+    n = min(len(estimate), len(reference))
+    if n <= 0:
+        return 0.0
+    step = max(1, n // max_points)
+    a = estimate[:n:step].astype(np.float64).reshape(-1)
+    b = reference[:n:step].astype(np.float64).reshape(-1)
+    a -= np.mean(a)
+    b -= np.mean(b)
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom <= 1e-15:
+        return 0.0
+    return float(np.dot(a, b) / denom)
+
+
+def _normalise_generated(out: Path, sr: int, work: Path) -> tuple[dict[str, np.ndarray], dict[str, str], dict[str, str]]:
+    generated_audio: dict[str, np.ndarray] = {}
+    generated_files: dict[str, str] = {}
+    fingerprints: dict[str, str] = {}
     for target in TARGETS:
         generated = mt._find_generated(out, target)
         if generated is None:
-            scores[target] = {"ok": False, "error": "generated stem not found"}
             continue
         norm = work / "scoring" / out.name / f"{target}.wav"
         mt._normalise_file(generated, norm, sr)
-        estimate, _ = mt._load(norm)
-        reference, _ = mt._load(refs[target])
+        audio, _ = mt._load(norm)
+        generated_audio[target] = audio
+        generated_files[target] = generated.name
+        fingerprints[target] = _audio_hash(audio)
+    return generated_audio, generated_files, fingerprints
+
+
+def _score_outputs(
+    generated_audio: dict[str, np.ndarray],
+    generated_files: dict[str, str],
+    refs: dict[str, Path],
+    sr: int,
+) -> tuple[dict, dict, dict]:
+    references = {target: mt._load(refs[target])[0] for target in TARGETS}
+    scores: dict[str, dict] = {}
+    matrix: dict[str, dict] = {}
+
+    for output_target in TARGETS:
+        estimate = generated_audio.get(output_target)
+        if estimate is None:
+            scores[output_target] = {"ok": False, "error": "generated stem not found"}
+            matrix[output_target] = {target: None for target in TARGETS}
+            continue
+
+        reference = references[output_target]
         try:
             score = _score(estimate, reference, sr)
-            scores[target] = {"ok": True, "file": generated.name, **score}
+            scores[output_target] = {
+                "ok": True,
+                "file": generated_files[output_target],
+                **score,
+            }
         except Exception as exc:
-            scores[target] = {"ok": False, "file": generated.name, "error": str(exc), "error_type": exc.__class__.__name__}
-    return scores
+            scores[output_target] = {
+                "ok": False,
+                "file": generated_files[output_target],
+                "error": str(exc),
+                "error_type": exc.__class__.__name__,
+            }
+
+        matrix[output_target] = {
+            reference_target: round(_routing_correlation(estimate, references[reference_target]), 6)
+            for reference_target in TARGETS
+        }
+
+    routing_by_reference = {}
+    for reference_target in TARGETS:
+        candidates = [
+            (output_target, matrix.get(output_target, {}).get(reference_target))
+            for output_target in TARGETS
+        ]
+        candidates = [(name, corr) for name, corr in candidates if corr is not None]
+        if not candidates:
+            routing_by_reference[reference_target] = {"best_output": None, "correlation": None}
+            continue
+        best_output, best_corr = max(candidates, key=lambda x: abs(float(x[1])))
+        routing_by_reference[reference_target] = {
+            "best_output": best_output,
+            "correlation": round(float(best_corr), 6),
+            "expected_output": reference_target,
+            "landed_as_expected": best_output == reference_target,
+        }
+
+    return scores, matrix, routing_by_reference
+
+
+def _parameter_effects(rows: list[dict]) -> dict:
+    good = [row for row in rows if row.get("return_code") == 0 and row.get("output_fingerprints")]
+    if not good:
+        return {"baseline": None, "comparisons": [], "duplicate_output_groups": []}
+    baseline = good[0]
+    baseline_id = baseline["experiment"]["id"]
+    comparisons = []
+    for row in good[1:]:
+        identical = []
+        changed = []
+        for target in TARGETS:
+            if row["output_fingerprints"].get(target) == baseline["output_fingerprints"].get(target):
+                identical.append(target)
+            else:
+                changed.append(target)
+        comparisons.append({
+            "experiment": row["experiment"]["id"],
+            "vs_baseline": baseline_id,
+            "identical_outputs": identical,
+            "changed_outputs": changed,
+            "all_outputs_identical": len(changed) == 0,
+        })
+
+    groups = defaultdict(list)
+    for row in good:
+        signature = tuple(row["output_fingerprints"].get(target, "missing") for target in TARGETS)
+        groups[signature].append(row["experiment"]["id"])
+    duplicate_groups = [members for members in groups.values() if len(members) > 1]
+    return {
+        "baseline": baseline_id,
+        "comparisons": comparisons,
+        "duplicate_output_groups": duplicate_groups,
+    }
+
+
+def _load_experiments() -> list[dict]:
+    raw = str(os.getenv("LITELABS_BENCHMARK_EXPERIMENTS_JSON", "")).strip()
+    if not raw:
+        return mt._normalise_experiments(None)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid LITELABS_BENCHMARK_EXPERIMENTS_JSON: {exc}") from exc
+    return mt._normalise_experiments(parsed)
 
 
 def run() -> dict:
@@ -125,10 +281,9 @@ def run() -> dict:
     timeout = max(300, min(3300, int(os.getenv("LITELABS_BENCHMARK_MODEL_TIMEOUT", "1800"))))
     model_dir = Path(os.getenv("LITELABS_AUDIO_SEPARATOR_MODEL_DIR", "/models/audio_separator"))
     model_dir.mkdir(parents=True, exist_ok=True)
-    experiments = mt._normalise_experiments(None)
+    experiments = _load_experiments()
     started = time.monotonic()
 
-    # Use the broader six-parent mapper for both inventory and references.
     mt._track_category = track_category
 
     with tempfile.TemporaryDirectory(prefix="litelabs_synthetic_gt_") as temp:
@@ -154,6 +309,11 @@ def run() -> dict:
             categories[item["category"]].append(item["name"])
         for target in TARGETS:
             log(f"reference {target}: {', '.join(categories.get(target, [])) or '[silence]'}")
+
+        reference_stats = _reference_stats(source_path, refs)
+        mapping_warnings = _mapping_warnings(inventory)
+        for warning in mapping_warnings:
+            log(f"taxonomy warning {warning['track']} -> {warning['mapped_category']}: {warning['warning']}")
 
         rows = []
         for i, exp in enumerate(experiments):
@@ -182,25 +342,36 @@ def run() -> dict:
                 "elapsed_seconds": round(float(elapsed), 3),
                 "peak_gpu_mib": peak_gpu,
                 "scores": {},
+                "routing_correlation_matrix": {},
+                "routing_by_reference": {},
+                "output_fingerprints": {},
             }
             if code == 0:
-                row["scores"] = _score_outputs(out, refs, sr, root / "work")
+                generated_audio, generated_files, fingerprints = _normalise_generated(out, sr, root / "work")
+                scores, matrix, routing = _score_outputs(generated_audio, generated_files, refs, sr)
+                row["scores"] = scores
+                row["routing_correlation_matrix"] = matrix
+                row["routing_by_reference"] = routing
+                row["output_fingerprints"] = fingerprints
             else:
                 row["error_tail"] = "\n".join(stdout.splitlines()[-40:])
             rows.append(row)
 
             snapshot = {
                 "ok": all(r["return_code"] == 0 for r in rows),
-                "mode": "synthetic_multitrack_ground_truth",
+                "mode": "synthetic_multitrack_ground_truth_v2",
                 "source_zip_url": zip_url,
                 "sample_rate": sr,
                 "global_scale": scale,
                 "reference_integrity": integrity,
+                "reference_stats": reference_stats,
                 "inventory": inventory,
                 "category_members": dict(categories),
+                "mapping_warnings": mapping_warnings,
                 "experiments_complete": len(rows),
                 "experiments_total": len(experiments),
                 "elapsed_seconds": round(time.monotonic() - started, 3),
+                "parameter_effects": _parameter_effects(rows),
                 "results": rows,
             }
             output.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
@@ -211,6 +382,7 @@ def run() -> dict:
         result["complete"] = True
         result["ok"] = all(r["return_code"] == 0 for r in rows)
         result["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        result["parameter_effects"] = _parameter_effects(rows)
         output.write_text(json.dumps(result, indent=2), encoding="utf-8")
         return result
 
