@@ -11,6 +11,7 @@ from urllib.parse import unquote, urlparse
 
 import numpy as np
 import soundfile as sf
+import torch
 
 from routed_extraction_v1 import _collect_named_outputs, _collect_sw_stems, _copy_as_flac, _db, _read, _safe_name, _write_flac
 from sw_residual_allocator import STEMS as SW_STEMS, _download, _resolve_model_files
@@ -45,6 +46,73 @@ def _copy_audio_tree(source_root: Path, destination_root: Path, prefix: str) -> 
         _copy_as_flac(src, dest)
         copied.append(dest.name)
     return copied
+
+
+def _wiener_kick(parent: np.ndarray, children: dict[str, np.ndarray], n_fft: int = 2048, hop: int = 512) -> np.ndarray:
+    """Return only the conservative p=1 Wiener-refined kick from the drums parent."""
+    n = min([len(parent)] + [len(children[name]) for name in DRUM5])
+    p = np.asarray(parent[:n], dtype=np.float32)
+    c = {name: np.asarray(children[name][:n], dtype=np.float32) for name in DRUM5}
+    window = torch.hann_window(n_fft, periodic=True)
+    result = np.zeros_like(p, dtype=np.float32)
+    eps = 1e-10
+    with torch.no_grad():
+        for ch in range(p.shape[1]):
+            parent_t = torch.from_numpy(p[:, ch])
+            parent_spec = torch.stft(parent_t, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=window, center=True, return_complex=True)
+            mags = []
+            for name in DRUM5:
+                stem_t = torch.from_numpy(c[name][:, ch])
+                stem_spec = torch.stft(stem_t, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=window, center=True, return_complex=True)
+                mags.append(torch.abs(stem_spec).clamp_min(eps))
+            denom = torch.stack(mags, dim=0).sum(dim=0).clamp_min(eps)
+            kick_mask = mags[0] / denom
+            kick_spec = parent_spec * kick_mask
+            wav = torch.istft(kick_spec, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=window, center=True, length=n)
+            result[:, ch] = wav.cpu().numpy().astype(np.float32)
+    return result
+
+
+def _apply_mass_conserving_kick_refinement(parent: np.ndarray, children: dict[str, np.ndarray]) -> tuple[dict[str, np.ndarray], dict]:
+    """Replace only kick with the proven mild Wiener version and preserve the drums parent exactly.
+
+    The correction required after replacing kick is redistributed across the four untouched
+    children according to their instantaneous energy. This keeps the refined kick intact while
+    avoiding a global Wiener pass that our supervised tests showed can hurt snare and hi-hat.
+    """
+    n = min([len(parent)] + [len(children[name]) for name in DRUM5])
+    parent_n = np.asarray(parent[:n], dtype=np.float32)
+    baseline = {name: np.asarray(children[name][:n], dtype=np.float32).copy() for name in DRUM5}
+    refined_kick = _wiener_kick(parent_n, baseline, n_fft=2048, hop=512)
+
+    out = {name: audio.copy() for name, audio in baseline.items()}
+    out["kick"] = refined_kick
+    others = [name for name in DRUM5 if name != "kick"]
+
+    current_sum = np.sum(np.stack([out[name] for name in DRUM5], axis=0), axis=0)
+    correction = parent_n - current_sum
+    energies = np.stack([np.square(baseline[name], dtype=np.float32) for name in others], axis=0)
+    denom = np.sum(energies, axis=0)
+    tiny = 1e-12
+    weights = energies / np.maximum(denom[None, ...], tiny)
+    silent = denom <= tiny
+    if np.any(silent):
+        weights[:, silent] = 1.0 / len(others)
+    for idx, name in enumerate(others):
+        out[name] = out[name] + correction * weights[idx]
+
+    rebuilt = np.sum(np.stack([out[name] for name in DRUM5], axis=0), axis=0)
+    residual = parent_n - rebuilt
+    parent_rms = float(np.sqrt(np.mean(parent_n * parent_n) + 1e-12))
+    residual_rms = float(np.sqrt(np.mean(residual * residual) + 1e-12))
+    kick_delta_rms = float(np.sqrt(np.mean((refined_kick - baseline["kick"]) ** 2) + 1e-12))
+    return out, {
+        "applied": True,
+        "method": "kick_only_wiener_p1_fft2048_mass_conserving",
+        "kick_delta_rms": kick_delta_rms,
+        "parent_vs_children_sum_cosine": round(float(_cos(parent_n, rebuilt)), 6),
+        "residual_relative_to_parent_db": _db(residual_rms / max(parent_rms, 1e-12)),
+    }
 
 
 def build_experimental_children_v1(payload: dict, progress=None) -> dict:
@@ -125,7 +193,7 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
         n = min(len(mixture), len(vocals))
         _write_flac(final / f"{track}_instrumental.flac", mixture[:n] - vocals[:n], mix_sr)
 
-        # Candidate A: higher-SDR 5-stem DrumSep. Never replaces parent Drums in this mode.
+        # Experimental drums: current 5-stem DrumSep plus targeted, supervised kick refinement.
         emit("Running DrumSep 5-Stem Experiment", 32)
         drums, drum_sr = _read(stems["drums"])
         sf.write(drum_in / "drums.wav", drums.astype(np.float32), drum_sr, subtype="FLOAT")
@@ -142,17 +210,20 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
             if len(loaded) == len(DRUM5):
                 dn = min([len(drums)] + [len(a) for a in loaded.values()])
                 parent = drums[:dn]
-                child_sum = np.sum(np.stack([loaded[name][:dn] for name in DRUM5], axis=0), axis=0)
-                residual = parent - child_sum
+                baseline = {name: loaded[name][:dn] for name in DRUM5}
+                baseline_sum = np.sum(np.stack([baseline[name] for name in DRUM5], axis=0), axis=0)
+                baseline_residual = parent - baseline_sum
                 parent_rms = float(np.sqrt(np.mean(parent * parent) + 1e-12))
-                residual_rms = float(np.sqrt(np.mean(residual * residual) + 1e-12))
+                baseline_residual_rms = float(np.sqrt(np.mean(baseline_residual * baseline_residual) + 1e-12))
+                refined, kick_refinement = _apply_mass_conserving_kick_refinement(parent, baseline)
                 drum_report.update({
-                    "parent_vs_children_sum_cosine": round(float(_cos(parent, child_sum)), 6),
-                    "residual_relative_to_parent_db": _db(residual_rms / max(parent_rms, 1e-12)),
+                    "baseline_parent_vs_children_sum_cosine": round(float(_cos(parent, baseline_sum)), 6),
+                    "baseline_residual_relative_to_parent_db": _db(baseline_residual_rms / max(parent_rms, 1e-12)),
+                    "kick_refinement": kick_refinement,
                 })
                 for name in DRUM5:
                     dest = experimental / f"{track}_drums_5stem_{name}.flac"
-                    _write_flac(dest, loaded[name][:dn], drum_sr)
+                    _write_flac(dest, refined[name], drum_sr)
                     drum_report["files"].append(dest.name)
             else:
                 drum_report["missing"] = [name for name in DRUM5 if name not in loaded]
@@ -176,12 +247,12 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
         sax_files = _copy_audio_tree(sax_out, experimental, f"{track}_sax_specialist") if sax.returncode == 0 else []
 
         report = {
-            "schema_version": 1,
+            "schema_version": 2,
             "mode": MODE,
             "quality_baseline": "BS-RoFormer-SW parent stems at ZIP root",
-            "experimental_policy": "Children are comparison-only and never replace parent stems in this mode",
+            "experimental_policy": "Children remain experimental; drums use the validated 5-stem path with kick-only mild Wiener refinement and mass-conserving compensation.",
             "models": {
-                "drums": "MDX23C DrumSep 5-stem mirror (aufr33/jarredou)",
+                "drums": "MDX23C DrumSep 5-stem mirror (aufr33/jarredou) + kick-only Wiener p=1 FFT2048",
                 "wind": WIND_MODEL,
                 "saxophone": SAX_MODEL,
             },
