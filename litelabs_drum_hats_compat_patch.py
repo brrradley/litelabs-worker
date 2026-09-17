@@ -20,15 +20,21 @@ else:
     indent = match.group('indent')
     audio_expr = match.group('audio').strip()
 
+    # Production has existed in several equivalent forms. Preserve any final
+    # export gain exactly as the original loop did, while changing only the
+    # public child layout from hh+cymbals to one hats stem.
     if audio_expr == 'refined[name]':
         expr = lambda name: f'refined["{name}"]'
     elif audio_expr == 'loaded[name][:dn]':
         expr = lambda name: f'loaded["{name}"][:dn]'
+    elif audio_expr == 'loaded[name][:dn] * export_gain':
+        expr = lambda name: f'loaded["{name}"][:dn] * export_gain'
+    elif audio_expr == 'refined[name] * export_gain':
+        expr = lambda name: f'refined["{name}"] * export_gain'
     else:
         raise RuntimeError(f'Unsupported DrumSep child export expression: {audio_expr}')
 
     i1 = indent + '    '
-    i2 = indent + '        '
     replacement = (
         f'{indent}# DrumSep still predicts hh and cymbals in one inference pass. Merge them\n'
         f'{indent}# in memory before final encoding so the public child is simply hats.\n'
@@ -47,6 +53,7 @@ else:
         f'{i1}"method": "in_memory_hh_plus_cymbals_before_final_encode",\n'
         f'{i1}"source_children": ["hh", "cymbals"],\n'
         f'{i1}"output_child": "hats",\n'
+        f'{i1}"source_export_expression": {audio_expr!r},\n'
         f'{i1}"parent_vs_final_children_sum_cosine": round(float(_cos(parent, merged_sum)), 6),\n'
         f'{i1}"residual_relative_to_parent_db": _db(merged_residual_rms / max(parent_rms, 1e-12)),\n'
         f'{indent}}}\n'
