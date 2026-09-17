@@ -13,11 +13,13 @@ COPY experimental_ground_truth_campaign_v2.py /app/experimental_ground_truth_cam
 COPY experimental_drum_refinement_campaign.py /app/experimental_drum_refinement_campaign.py
 COPY experimental_drum_disturbia_validation.py /app/experimental_drum_disturbia_validation.py
 COPY experimental_vocal_cascade_bakeoff.py /app/experimental_vocal_cascade_bakeoff.py
+COPY litelabs_vocal_bakeoff_category_fix.py /app/litelabs_vocal_bakeoff_category_fix.py
 COPY drum_decomposition_v1.py /app/drum_decomposition_v1.py
 COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 
-RUN python -m py_compile \
+RUN python /app/litelabs_vocal_bakeoff_category_fix.py \
+    && python -m py_compile \
         /app/handler.py \
         /app/multitrack_ground_truth_campaign.py \
         /app/mix_reconstruction_campaign.py \
@@ -53,6 +55,11 @@ for path in required:
 handler = Path('/app/handler.py').read_text(encoding='utf-8')
 assert 'multitrack_ground_truth_campaign' in handler
 assert 'build_multitrack_ground_truth_campaign' in handler
+
+vocal_source = Path('/app/experimental_vocal_cascade_bakeoff.py').read_text(encoding='utf-8')
+assert "sgt.track_category(name) == 'vocals'" in vocal_source
+assert 'category = sgt.track_category(name)' in vocal_source
+assert 'category, _warning = sgt.track_category(name)' not in vocal_source
 
 for name in [
     'synthetic_ground_truth_campaign',
