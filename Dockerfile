@@ -1,146 +1,140 @@
-FROM ghcr.io/brrradley/litelabs-worker:58aea79a4ad81ea592cb18bce8a92bd18f26462c
+FROM ghcr.io/brrradley/litelabs-worker:f6d1cbbff61f1c6ce9cf8d2001c2b9f2819db2c4
 
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 WORKDIR /app
 
-# Incremental v3 beta build: all current models/runtimes are already baked into
-# the verified 58aea79 image. Apply only lightweight routing/tuning patches so
-# routine changes never redownload large checkpoints from external hosts.
-COPY litelabs_wind_vr_fast_patch.py /app/litelabs_wind_vr_fast_patch.py
-COPY litelabs_v3_inventory_recall_patch.py /app/litelabs_v3_inventory_recall_patch.py
-COPY litelabs_v3_child_export_fix_patch.py /app/litelabs_v3_child_export_fix_patch.py
-COPY demucs3_legacy_loader.py /app/demucs3_legacy_loader.py
-COPY preset_pack.py /app/preset_pack.py
-COPY litelabs_v3_presets_patch.py /app/litelabs_v3_presets_patch.py
-COPY litelabs_public_progress_branding_patch.py /app/litelabs_public_progress_branding_patch.py
-COPY qa_research.py /app/qa_research.py
-COPY litelabs_research_qa_patch.py /app/litelabs_research_qa_patch.py
-COPY litelabs_preset_readme_metadata_patch.py /app/litelabs_preset_readme_metadata_patch.py
-COPY litelabs_long_job_safety_patch.py /app/litelabs_long_job_safety_patch.py
-COPY litelabs_chunked_result_upload_patch.py /app/litelabs_chunked_result_upload_patch.py
+# Increment from the last verified production image. It already contains the
+# current v3 preset/routing/QA/upload stack; this layer only promotes the locked
+# vocal benchmark and the in-memory hh+cymbals -> hats output policy.
+COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.py
+COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
 
-RUN python /app/litelabs_wind_vr_fast_patch.py \
-    && python /app/litelabs_v3_inventory_recall_patch.py \
-    && python /app/litelabs_v3_child_export_fix_patch.py \
-    && python /app/litelabs_v3_presets_patch.py \
-    && python /app/litelabs_public_progress_branding_patch.py \
-    && python /app/litelabs_research_qa_patch.py \
-    && python /app/litelabs_preset_readme_metadata_patch.py \
-    && python /app/litelabs_long_job_safety_patch.py \
-    && python /app/litelabs_chunked_result_upload_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/demucs3_legacy_loader.py /app/preset_pack.py /app/qa_research.py /app/litelabs_chunked_result_upload_patch.py \
+# Bake the two Becruily MelBand models used by the locked benchmark so customer
+# jobs never download multi-GB checkpoints at runtime. URLs are pinned to the
+# verified upstream commits and checkpoints are SHA256 checked.
+RUN mkdir -p /models/audio_separator /app/benchmarks \
     && python - <<'PY'
 from pathlib import Path
-import sys
-sys.path.insert(0, '/app')
-from preset_pack import PRESETS, PARENT_LABELS, preset_capabilities
-from qa_research import QA_VERSION, build_research_qa
+import hashlib
+import time
+import requests
 
-source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
-handler = Path('/app/handler.py').read_text(encoding='utf-8')
-preset_source = Path('/app/preset_pack.py').read_text(encoding='utf-8')
-qa_source = Path('/app/qa_research.py').read_text(encoding='utf-8')
-assert '"--vr_batch_size", "8"' in source
-assert '"--vr_window_size", "1024"' in source
-assert '"--use_autocast"' in source
-assert 'centers = (0.08, 0.25, 0.42, 0.58, 0.75, 0.92)' in source
-assert 'segment_len = max(1, int(other_sr * 3.0))' in source
-assert '>= -45.0' in source
-assert '>= 0.12' in source
-assert 'run_sax_specialist' in source
-assert 'Path(SAX_MODEL).stem' in source
-assert '/app/demucs3_legacy_loader.py' in source
-assert 'wind_output_ok = False' in source
-assert '"output_validated": bool(wind_output_ok)' in source
-loader = Path('/app/demucs3_legacy_loader.py').read_text(encoding='utf-8')
-assert 'weights_only' in loader and 'False' in loader
-assert PRESETS['basic'] == ('instrumental', 'vocals')
-assert PRESETS['core'] == ('vocals', 'percussion', 'bass', 'strings', 'keys', 'other')
-assert 'lead_vocals' in PRESETS['experimental'] and 'saxophone' in PRESETS['experimental']
-assert PARENT_LABELS['drums'] == 'percussion'
-assert PARENT_LABELS['guitar'] == 'strings'
-assert PARENT_LABELS['piano'] == 'keys'
-capabilities = preset_capabilities()
-assert capabilities['schema_version'] == 1
-assert [item['id'] for item in capabilities['presets']] == ['basic', 'core', 'experimental']
-assert capabilities['presets'][0]['stems'] == ['Instrumental', 'Vocals']
-assert capabilities['presets'][2]['stems'][-2:] == ['Wind / Brass', 'Saxophone']
-assert 'payload.get("capabilities") is True' in handler
-assert 'preset_capabilities' in handler
-assert 'preset in {"basic", "core"}' in handler
-assert 'preset not in {"basic", "core", "experimental"}' in handler
-assert '"presets": ["basic", "core", "experimental"]' in handler
-# Preset README must retain useful track metadata from the pre-preset packs.
-for field in (
-    'Track:',
-    'Output format: FLAC',
-    'Stem pack size:',
-    'Elapsed time:',
-    'Detected genre:',
-    'Genre reason:',
-    'TRACK INFORMATION',
-    'ABOUT THIS PACK',
-):
-    assert field in preset_source
-assert 'stem_pack_size_bytes' in preset_source
-assert 'rebuild_archive()' in preset_source
-# Silent research QA must be generated for parent and experimental packs but
-# must not be written into the customer-facing preset report archive.
-assert QA_VERSION == 2
-assert 'heuristic_research_signal_v2' in qa_source
-assert 'peer_group_aware' in qa_source
-assert 'hard_quality_caps' in qa_source
-assert 'research_qa = build_research_qa(' in preset_source
-assert '"research_qa": research_qa' in preset_source
-assert 'research_qa = build_research_qa(' in source
-assert '"research_qa": research_qa' in source
-assert '"research_qa": research_qa' not in preset_source[preset_source.index('report = {'):preset_source.index('(final / f"{track}_PRESET_REPORT.json")')]
-# Oversized result uploads must fail explicitly instead of becoming an opaque
-# exception followed by a one-hour abandoned cleanup in the XenForo add-on.
-for public_source in (source, preset_source):
-    assert 'LiteLABS result archive ready:' in public_source
-    assert 'response.status_code == 413' in public_source
-    assert '"error_code": "result_too_large"' in public_source
-    assert '"failed_stage": "result_upload"' in public_source
-# Large result packs must support authenticated retry-safe chunk delivery so a
-# single reverse-proxy/PHP request-size ceiling cannot reject >1 GB archives.
-for public_source in (source, preset_source):
-    assert 'def _litelabs_upload_archive(' in public_source
-    assert 'result_upload_mode' in public_source
-    assert 'result_chunk_size_mb' in public_source
-    assert 'requests.post(' in public_source
-    assert 'Chunk receiver did not confirm final archive assembly' in public_source
-# Customer-facing progress must use LiteLABS product labels rather than model names.
-public_progress = handler + '\n' + source + '\n' + preset_source
-for label in (
-    'LiteLABS-RS Parent Separation',
-    'LiteLABS-DR Drum Decomposition',
-    'LiteLABS-VX Vocal Separation',
-    'LiteLABS-IR Instrument Analysis',
-    'LiteLABS-WB Wind/Brass Separation',
-    'LiteLABS-SX Saxophone Separation',
-):
-    assert label in public_progress
-for internal in (
-    'BS-RoFormer Parent Separation',
-    'DrumSep 5-Stem Decomposition',
-    'Lead/Backing Vocal Separation',
-    'Mega53 Instrument Inventory',
-    'Wind/Brass Family Separation',
-    'Saxophone Specialist Separation',
-):
-    assert internal not in public_progress
-assert Path('/models/drumsep_5stem/mdx23c_drumsep_5stem_aufr33_jarredou.ckpt').is_file()
-assert Path('/models/mss_training/mvsep-mega53/model.ckpt').is_file()
-assert Path('/models/sax_demucs/filosax_demucs_v3_14.22_SDR.th').is_file()
-assert Path('/models/audio_separator/17_HP-Wind_Inst-UVR.pth').is_file()
-assert Path('/models/karaoke_bs_roformer/model.ckpt').is_file()
-print('LiteLABS v3 preset image with QA v2, long-job diagnostics and chunked result uploads ready')
+ASSETS = [
+    (
+        'https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/af457f56e56eb23fa8322929eef6a63b455e5858/config_vocals_becruily.yaml?download=true',
+        Path('/models/audio_separator/config_vocals_becruily.yaml'),
+        None,
+    ),
+    (
+        'https://huggingface.co/becruily/mel-band-roformer-vocals/resolve/af457f56e56eb23fa8322929eef6a63b455e5858/mel_band_roformer_vocals_becruily.ckpt?download=true',
+        Path('/models/audio_separator/mel_band_roformer_vocals_becruily.ckpt'),
+        'a05961310cc55fbb901290c2e8be02682942f73522b6ac76bf2ec11e347ed95a',
+    ),
+    (
+        'https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/0c149975cfaa261c7d87baf54330a9da85bcf888/config_karaoke_becruily.yaml?download=true',
+        Path('/models/audio_separator/config_karaoke_becruily.yaml'),
+        None,
+    ),
+    (
+        'https://huggingface.co/becruily/mel-band-roformer-karaoke/resolve/0c149975cfaa261c7d87baf54330a9da85bcf888/mel_band_roformer_karaoke_becruily.ckpt?download=true',
+        Path('/models/audio_separator/mel_band_roformer_karaoke_becruily.ckpt'),
+        'd3aa262ac01df870b9fc033e9c7b6cad33fe04fc9c148b6c40841326a515a0e0',
+    ),
+]
+
+
+def download(url: str, path: Path, attempts: int = 5) -> None:
+    if path.is_file():
+        return
+    tmp = path.with_suffix(path.suffix + '.part')
+    for attempt in range(1, attempts + 1):
+        try:
+            tmp.unlink(missing_ok=True)
+            with requests.get(url, stream=True, timeout=(30, 1800)) as response:
+                response.raise_for_status()
+                with tmp.open('wb') as handle:
+                    for chunk in response.iter_content(4 * 1024 * 1024):
+                        if chunk:
+                            handle.write(chunk)
+            tmp.replace(path)
+            return
+        except Exception as exc:
+            tmp.unlink(missing_ok=True)
+            if attempt >= attempts:
+                raise
+            wait = min(30, 2 ** attempt)
+            print(f'download attempt {attempt}/{attempts} failed for {path.name}: {exc}; retrying in {wait}s', flush=True)
+            time.sleep(wait)
+
+
+for url, path, expected in ASSETS:
+    download(url, path)
+    if expected:
+        digest = hashlib.sha256()
+        with path.open('rb') as handle:
+            for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b''):
+                digest.update(chunk)
+        actual = digest.hexdigest()
+        if actual != expected:
+            raise RuntimeError(f'SHA256 mismatch for {path.name}: {actual}')
+print('Locked Becruily vocal benchmark models baked and verified')
 PY
 
-# Execute the real final handler startup path, but intercept RunPod's blocking
-# serverless start call. A green image must still boot the actual handler.
+RUN python /app/litelabs_locked_vocal_hats_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/litelabs_locked_vocal_hats_patch.py \
+    && python - <<'PY'
+from pathlib import Path
+import json
+import sys
+sys.path.insert(0, '/app')
+from preset_pack import PRESETS, STEM_LABELS, preset_capabilities
+
+source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
+preset_source = Path('/app/preset_pack.py').read_text(encoding='utf-8')
+benchmark = json.loads(Path('/app/benchmarks/vocal_benchmark_v1.json').read_text(encoding='utf-8'))
+
+assert benchmark['benchmark_id'] == 'vocal_benchmark_v1'
+assert benchmark['status'] == 'locked'
+assert benchmark['locked_recipes']['lead_vocals']['quality_score'] == 65.48
+assert benchmark['locked_recipes']['backing_vocals']['strict_quality_score'] == 19.77
+
+# Locked vocal production recipes.
+assert '"benchmark_id": "vocal_benchmark_v1"' in source
+assert '0.25 * np.asarray(sw_vocals_audio' in source
+assert '0.75 * np.asarray(alt_vocals_audio' in source
+assert 'mel_band_roformer_vocals_becruily.ckpt' in source
+assert source.count('mel_band_roformer_karaoke_becruily.ckpt') >= 2
+assert 'best_backing = fast_parent - fast_lead' in source
+assert 'best_stems_share_single_parent_pair' in source
+
+# HH and cymbals remain one DrumSep inference but are merged before encoding.
+assert '"hats": refined["hh"] + refined["cymbals"]' in source
+assert 'in_memory_hh_plus_cymbals_before_final_encode' in source
+assert 'hats' in PRESETS['experimental']
+assert 'hi_hats' not in PRESETS['experimental']
+assert 'cymbals' not in PRESETS['experimental']
+assert STEM_LABELS['hats'] == 'Hats'
+capabilities = preset_capabilities()
+experimental = next(item for item in capabilities['presets'] if item['id'] == 'experimental')
+assert 'Hats' in experimental['stems']
+assert 'Hi-Hats' not in experimental['stems']
+assert 'Cymbals' not in experimental['stems']
+
+# Required frozen assets.
+for path in (
+    '/models/audio_separator/config_vocals_becruily.yaml',
+    '/models/audio_separator/mel_band_roformer_vocals_becruily.ckpt',
+    '/models/audio_separator/config_karaoke_becruily.yaml',
+    '/models/audio_separator/mel_band_roformer_karaoke_becruily.ckpt',
+):
+    assert Path(path).is_file(), path
+
+print('LiteLABS locked vocal benchmark v1 + merged hats production image verified')
+PY
+
+# Smoke-test the real final handler startup path without entering RunPod's
+# blocking serverless loop.
 RUN python - <<'PY'
 import runpy
 import runpod.serverless
