@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import tempfile
 import time
 from collections import defaultdict
@@ -53,6 +54,23 @@ def track_category(name: str) -> str:
     if any(x in n for x in ["guitar", "gtr"]):
         return "guitar"
     return "other"
+
+
+def _remove_macos_metadata(root: Path) -> None:
+    """Strip Finder/AppleDouble metadata before the legacy track loader sees it."""
+    removed_files = 0
+    removed_dirs = 0
+    for path in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        try:
+            if path.is_dir() and path.name == "__MACOSX":
+                shutil.rmtree(path, ignore_errors=True)
+                removed_dirs += 1
+            elif path.is_file() and (path.name.startswith("._") or path.name == ".DS_Store"):
+                path.unlink(missing_ok=True)
+                removed_files += 1
+        except FileNotFoundError:
+            pass
+    log(f"removed macOS metadata: {removed_dirs} dirs, {removed_files} files")
 
 
 def _reference_integrity(source_path: Path, refs: dict[str, Path], sr: int) -> dict:
@@ -121,6 +139,7 @@ def run() -> dict:
         progress("Downloading multitrack pack", 2)
         mt._download(zip_url, archive)
         mt._safe_extract(archive, extracted)
+        _remove_macos_metadata(extracted)
 
         progress("Building exact studio mixture and references", 5)
         tracks, sr, inventory = mt._build_tracks(extracted, root / "work")
