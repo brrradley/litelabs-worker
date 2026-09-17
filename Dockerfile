@@ -7,6 +7,7 @@ WORKDIR /app
 # Increment from the last verified production image. It already contains the
 # current v3 preset/routing/QA/upload stack; this layer only promotes the locked
 # vocal benchmark and the in-memory hh+cymbals -> hats output policy.
+COPY litelabs_drum_hats_compat_patch.py /app/litelabs_drum_hats_compat_patch.py
 COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
 
@@ -81,8 +82,13 @@ for url, path, expected in ASSETS:
 print('Locked Becruily vocal benchmark models baked and verified')
 PY
 
-RUN python /app/litelabs_locked_vocal_hats_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/litelabs_locked_vocal_hats_patch.py \
+# The verified production image has evolved through several patch generations,
+# so normalise its DrumSep export loop first. This compatibility patch accepts
+# either the older loaded[name][:dn] form or the refined[name] form and writes
+# the same final kick/snare/toms/hats policy.
+RUN python /app/litelabs_drum_hats_compat_patch.py \
+    && python /app/litelabs_locked_vocal_hats_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -91,7 +97,6 @@ sys.path.insert(0, '/app')
 from preset_pack import PRESETS, STEM_LABELS, preset_capabilities
 
 source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
-preset_source = Path('/app/preset_pack.py').read_text(encoding='utf-8')
 benchmark = json.loads(Path('/app/benchmarks/vocal_benchmark_v1.json').read_text(encoding='utf-8'))
 
 assert benchmark['benchmark_id'] == 'vocal_benchmark_v1'
@@ -109,8 +114,9 @@ assert 'best_backing = fast_parent - fast_lead' in source
 assert 'best_stems_share_single_parent_pair' in source
 
 # HH and cymbals remain one DrumSep inference but are merged before encoding.
-assert '"hats": refined["hh"] + refined["cymbals"]' in source
 assert 'in_memory_hh_plus_cymbals_before_final_encode' in source
+assert '"hats":' in source and '"hh"' in source and '"cymbals"' in source
+assert 'for name, audio in final_children.items()' in source
 assert 'hats' in PRESETS['experimental']
 assert 'hi_hats' not in PRESETS['experimental']
 assert 'cymbals' not in PRESETS['experimental']
