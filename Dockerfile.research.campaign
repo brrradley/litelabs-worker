@@ -16,6 +16,7 @@ COPY experimental_vocal_cascade_bakeoff.py /app/experimental_vocal_cascade_bakeo
 COPY litelabs_vocal_bakeoff_category_fix.py /app/litelabs_vocal_bakeoff_category_fix.py
 COPY litelabs_vocal_bakeoff_model_patch.py /app/litelabs_vocal_bakeoff_model_patch.py
 COPY litelabs_vocal_bakeoff_scoring_fix.py /app/litelabs_vocal_bakeoff_scoring_fix.py
+COPY litelabs_vocal_bakeoff_orientation_patch.py /app/litelabs_vocal_bakeoff_orientation_patch.py
 COPY drum_decomposition_v1.py /app/drum_decomposition_v1.py
 COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
 COPY research_bootstrap.py /app/research_bootstrap.py
@@ -63,6 +64,7 @@ PY
 RUN python /app/litelabs_vocal_bakeoff_category_fix.py \
     && python /app/litelabs_vocal_bakeoff_model_patch.py \
     && python /app/litelabs_vocal_bakeoff_scoring_fix.py \
+    && python /app/litelabs_vocal_bakeoff_orientation_patch.py \
     && python -m py_compile \
         /app/handler.py \
         /app/multitrack_ground_truth_campaign.py \
@@ -103,13 +105,16 @@ assert 'multitrack_ground_truth_campaign' in handler
 assert 'build_multitrack_ground_truth_campaign' in handler
 
 vocal_source = Path('/app/experimental_vocal_cascade_bakeoff.py').read_text(encoding='utf-8')
-assert 'experimental_vocal_cascade_bakeoff_v2' in vocal_source
+assert 'experimental_vocal_cascade_bakeoff_v3' in vocal_source
 assert '_run_current_set_karaoke' in vocal_source
 assert "CURRENT_KARAOKE_CHECKPOINT = Path(\"/models/karaoke_bs_roformer/model.ckpt\")" in vocal_source
 assert '_is_extended_vocal_reference' in vocal_source
 assert 'groups[-1].strip().lower() == token' in vocal_source
 assert 'native_assignment_matrix' in vocal_source
 assert 'SELECTED_LEAD_FILE=' in vocal_source
+assert 'set_current_flipped_residual_pair' in vocal_source
+assert 'becruily_parent_flipped_native_pair' in vocal_source
+assert 'becruily_direct_secondary_as_lead_v1' in vocal_source
 assert 'category, _warning = sgt.track_category(name)' not in vocal_source
 assert 'CURRENT_KARAOKE, sw_vocals_path, root / "set_karaoke"' not in vocal_source
 
@@ -126,7 +131,7 @@ for name in [
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert hasattr(module, 'run')
-print('focused Disturbia vocal cascade bakeoff v2 image verified')
+print('focused Disturbia vocal cascade bakeoff v3 image verified')
 PY
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
