@@ -14,11 +14,53 @@ COPY experimental_drum_refinement_campaign.py /app/experimental_drum_refinement_
 COPY experimental_drum_disturbia_validation.py /app/experimental_drum_disturbia_validation.py
 COPY experimental_vocal_cascade_bakeoff.py /app/experimental_vocal_cascade_bakeoff.py
 COPY litelabs_vocal_bakeoff_category_fix.py /app/litelabs_vocal_bakeoff_category_fix.py
+COPY litelabs_vocal_bakeoff_model_patch.py /app/litelabs_vocal_bakeoff_model_patch.py
 COPY drum_decomposition_v1.py /app/drum_decomposition_v1.py
 COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 
+# The older audio-separator registry in this known-good research base does not
+# expose the exact BS-RoFormer Karaoke checkpoint used by production SET.
+# Bake that public checkpoint/config explicitly and run it through the same MSS
+# inference path as production, rather than silently substituting another model.
+RUN mkdir -p /models/karaoke_bs_roformer \
+    && python - <<'PY'
+from pathlib import Path
+import hashlib
+import requests
+
+assets = [
+    (
+        'https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/bs_roformer_karaoke_frazer_becruily.ckpt?download=true',
+        Path('/models/karaoke_bs_roformer/model.ckpt'),
+        'eb90ee24c1154d83fbcfd27e96182f19e061557cc6e4746953125e08c29389f9',
+    ),
+    (
+        'https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/config_karaoke_frazer_becruily.yaml?download=true',
+        Path('/models/karaoke_bs_roformer/config.yaml'),
+        None,
+    ),
+]
+for url, path, expected in assets:
+    with requests.get(url, stream=True, timeout=(30, 1800)) as r:
+        r.raise_for_status()
+        with path.open('wb') as f:
+            for chunk in r.iter_content(4 * 1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+    if expected:
+        h = hashlib.sha256()
+        with path.open('rb') as f:
+            for chunk in iter(lambda: f.read(4 * 1024 * 1024), b''):
+                h.update(chunk)
+        actual = h.hexdigest()
+        if actual != expected:
+            raise RuntimeError(f'current SET karaoke checkpoint hash mismatch: {actual}')
+print('current SET BS-RoFormer Karaoke assets baked and verified')
+PY
+
 RUN python /app/litelabs_vocal_bakeoff_category_fix.py \
+    && python /app/litelabs_vocal_bakeoff_model_patch.py \
     && python -m py_compile \
         /app/handler.py \
         /app/multitrack_ground_truth_campaign.py \
@@ -48,6 +90,8 @@ required = [
     '/app/drum_decomposition_v1.py',
     '/app/ground_truth_benchmark.py',
     '/app/research_bootstrap.py',
+    '/models/karaoke_bs_roformer/model.ckpt',
+    '/models/karaoke_bs_roformer/config.yaml',
 ]
 for path in required:
     assert Path(path).is_file(), path
@@ -60,6 +104,9 @@ vocal_source = Path('/app/experimental_vocal_cascade_bakeoff.py').read_text(enco
 assert "sgt.track_category(name) == 'vocals'" in vocal_source
 assert 'category = sgt.track_category(name)' in vocal_source
 assert 'category, _warning = sgt.track_category(name)' not in vocal_source
+assert '_run_current_set_karaoke' in vocal_source
+assert "CURRENT_KARAOKE_CHECKPOINT = Path(\"/models/karaoke_bs_roformer/model.ckpt\")" in vocal_source
+assert 'CURRENT_KARAOKE, sw_vocals_path, root / "set_karaoke"' not in vocal_source
 
 for name in [
     'synthetic_ground_truth_campaign',
