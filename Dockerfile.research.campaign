@@ -1,18 +1,20 @@
 FROM ghcr.io/brrradley/litelabs-research-worker:7cedb8c2bca7a330ffe7d7aa53692b96942a7ee6
 
 ENV PYTHONUNBUFFERED=1 \
-    LITELABS_RESEARCH_BUILD=experimental-vocal-cross-song-validation-v8
+    LITELABS_RESEARCH_BUILD=experimental-vocal-final-disturbia-v8
 
 # Reuse the fully verified v6 image so we do not rebuild/download the large vocal
-# model stack. Add the final cross-song validation, its no-backing-reference fallback,
-# and the cheap hh+cymbals -> hats output merge for the experimental drum child path.
+# model stack. Add the final validation, no-backing fallback, hats merge, and an
+# automatic Disturbia entrypoint so RunPod env leftovers cannot select the wrong pack.
 COPY experimental_vocal_cross_song_validation.py /app/experimental_vocal_cross_song_validation.py
 COPY litelabs_vocal_cross_song_fallback_patch.py /app/litelabs_vocal_cross_song_fallback_patch.py
 COPY experimental_children_v1.py /app/experimental_children_v1.py
 COPY litelabs_drum_hats_merge_patch.py /app/litelabs_drum_hats_merge_patch.py
+COPY run_final_disturbia_validation.sh /app/run_final_disturbia_validation.sh
 
 RUN python /app/litelabs_vocal_cross_song_fallback_patch.py \
     && python /app/litelabs_drum_hats_merge_patch.py \
+    && chmod +x /app/run_final_disturbia_validation.sh \
     && python -m py_compile \
         /app/experimental_vocal_cross_song_validation.py \
         /app/experimental_children_v1.py \
@@ -22,9 +24,9 @@ import importlib.util
 
 vocal = Path('/app/experimental_vocal_cross_song_validation.py').read_text(encoding='utf-8')
 children = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
+entry = Path('/app/run_final_disturbia_validation.sh').read_text(encoding='utf-8')
 
 assert 'experimental_vocal_cross_song_validation_v8' in vocal
-assert '4%20non%20blondes%20-%20what%27s%20up%28studio%20stems%29.zip' in vocal
 assert 'ignore_backing_metrics' in vocal
 assert 'backing_metrics_ignored' in vocal
 assert 'quality_sw25_mel75_to_becruily_residual_pair' in vocal
@@ -35,11 +37,16 @@ assert 'in_memory_hh_plus_cymbals_before_final_encode' in children
 assert '"hats": refined["hh"] + refined["cymbals"]' in children
 assert 'for name, audio in final_children.items()' in children
 
+assert 'disturbia_test.zip' in entry
+assert 'disturbia_vocal_final_validation_v8.json' in entry
+assert 'python -u /app/experimental_vocal_cross_song_validation.py' in entry
+assert 'http.server 8888' in entry
+
 spec = importlib.util.spec_from_file_location('vocal_v8', '/app/experimental_vocal_cross_song_validation.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 assert hasattr(module, 'run')
-print('cross-song vocal validation v8 + backing fallback + in-memory hats merge verified')
+print('automatic final Disturbia vocal validation image verified')
 PY
 
-CMD ["python", "-u", "/app/research_bootstrap.py"]
+CMD ["/app/run_final_disturbia_validation.sh"]
