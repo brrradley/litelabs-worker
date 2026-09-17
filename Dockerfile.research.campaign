@@ -49,4 +49,9 @@ assert hasattr(module, 'run')
 print('automatic final Disturbia vocal validation image verified')
 PY
 
-CMD ["/app/run_final_disturbia_validation.sh"]
+# The v6 base image carries its own ENTRYPOINT. CMD alone does not replace an
+# inherited ENTRYPOINT, so RunPod was still starting the old research bootstrap
+# and therefore using its stale/default benchmark environment. Replace the
+# inherited entrypoint explicitly so this container always runs the Disturbia test.
+ENTRYPOINT ["/app/run_final_disturbia_validation.sh"]
+CMD []
