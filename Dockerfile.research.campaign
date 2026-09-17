@@ -1,152 +1,43 @@
-FROM ghcr.io/brrradley/litelabs-research-worker:b3848dea832b9b4bba956ba48668262c6d4018c4
+FROM ghcr.io/brrradley/litelabs-research-worker:7cedb8c2bca7a330ffe7d7aa53692b96942a7ee6
 
 ENV PYTHONUNBUFFERED=1 \
-    LITELABS_RESEARCH_BUILD=experimental-vocal-cascade-bakeoff
+    LITELABS_RESEARCH_BUILD=experimental-vocal-cross-song-validation-v7
 
-# Layer current research campaign modules onto the known-good research image.
-COPY handler.py /app/handler.py
-COPY multitrack_ground_truth_campaign.py /app/multitrack_ground_truth_campaign.py
-COPY mix_reconstruction_campaign.py /app/mix_reconstruction_campaign.py
-COPY synthetic_ground_truth_campaign.py /app/synthetic_ground_truth_campaign.py
-COPY experimental_ground_truth_campaign.py /app/experimental_ground_truth_campaign.py
-COPY experimental_ground_truth_campaign_v2.py /app/experimental_ground_truth_campaign_v2.py
-COPY experimental_drum_refinement_campaign.py /app/experimental_drum_refinement_campaign.py
-COPY experimental_drum_disturbia_validation.py /app/experimental_drum_disturbia_validation.py
-COPY experimental_vocal_cascade_bakeoff.py /app/experimental_vocal_cascade_bakeoff.py
-COPY litelabs_vocal_bakeoff_category_fix.py /app/litelabs_vocal_bakeoff_category_fix.py
-COPY litelabs_vocal_bakeoff_model_patch.py /app/litelabs_vocal_bakeoff_model_patch.py
-COPY litelabs_vocal_bakeoff_scoring_fix.py /app/litelabs_vocal_bakeoff_scoring_fix.py
-COPY litelabs_vocal_bakeoff_orientation_patch.py /app/litelabs_vocal_bakeoff_orientation_patch.py
-COPY litelabs_vocal_bakeoff_residual_patch.py /app/litelabs_vocal_bakeoff_residual_patch.py
-COPY litelabs_vocal_bakeoff_ensemble_patch.py /app/litelabs_vocal_bakeoff_ensemble_patch.py
-COPY litelabs_vocal_bakeoff_blend_sweep_patch.py /app/litelabs_vocal_bakeoff_blend_sweep_patch.py
-COPY drum_decomposition_v1.py /app/drum_decomposition_v1.py
-COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
-COPY research_bootstrap.py /app/research_bootstrap.py
+# Reuse the fully verified v6 image so we do not rebuild/download the large vocal
+# model stack. Add only the final cross-song validation script and the cheap
+# hh+cymbals -> hats output merge for the experimental drum child path.
+COPY experimental_vocal_cross_song_validation.py /app/experimental_vocal_cross_song_validation.py
+COPY experimental_children_v1.py /app/experimental_children_v1.py
+COPY litelabs_drum_hats_merge_patch.py /app/litelabs_drum_hats_merge_patch.py
 
-# The older audio-separator registry in this known-good research base does not
-# expose the exact BS-RoFormer Karaoke checkpoint used by production SET.
-# Bake that public checkpoint/config explicitly and run it through the same MSS
-# inference path as production, rather than silently substituting another model.
-RUN mkdir -p /models/karaoke_bs_roformer \
-    && python - <<'PY'
-from pathlib import Path
-import hashlib
-import requests
-
-assets = [
-    (
-        'https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/bs_roformer_karaoke_frazer_becruily.ckpt?download=true',
-        Path('/models/karaoke_bs_roformer/model.ckpt'),
-        'eb90ee24c1154d83fbcfd27e96182f19e061557cc6e4746953125e08c29389f9',
-    ),
-    (
-        'https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/config_karaoke_frazer_becruily.yaml?download=true',
-        Path('/models/karaoke_bs_roformer/config.yaml'),
-        None,
-    ),
-]
-for url, path, expected in assets:
-    with requests.get(url, stream=True, timeout=(30, 1800)) as r:
-        r.raise_for_status()
-        with path.open('wb') as f:
-            for chunk in r.iter_content(4 * 1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-    if expected:
-        h = hashlib.sha256()
-        with path.open('rb') as f:
-            for chunk in iter(lambda: f.read(4 * 1024 * 1024), b''):
-                h.update(chunk)
-        actual = h.hexdigest()
-        if actual != expected:
-            raise RuntimeError(f'current SET karaoke checkpoint hash mismatch: {actual}')
-print('current SET BS-RoFormer Karaoke assets baked and verified')
-PY
-
-RUN python /app/litelabs_vocal_bakeoff_category_fix.py \
-    && python /app/litelabs_vocal_bakeoff_model_patch.py \
-    && python /app/litelabs_vocal_bakeoff_scoring_fix.py \
-    && python /app/litelabs_vocal_bakeoff_orientation_patch.py \
-    && python /app/litelabs_vocal_bakeoff_residual_patch.py \
-    && python /app/litelabs_vocal_bakeoff_ensemble_patch.py \
-    && python /app/litelabs_vocal_bakeoff_blend_sweep_patch.py \
+RUN python /app/litelabs_drum_hats_merge_patch.py \
     && python -m py_compile \
-        /app/handler.py \
-        /app/multitrack_ground_truth_campaign.py \
-        /app/mix_reconstruction_campaign.py \
-        /app/synthetic_ground_truth_campaign.py \
-        /app/experimental_ground_truth_campaign.py \
-        /app/experimental_ground_truth_campaign_v2.py \
-        /app/experimental_drum_refinement_campaign.py \
-        /app/experimental_drum_disturbia_validation.py \
-        /app/experimental_vocal_cascade_bakeoff.py \
-        /app/drum_decomposition_v1.py \
-        /app/ground_truth_benchmark.py \
-        /app/research_bootstrap.py \
+        /app/experimental_vocal_cross_song_validation.py \
+        /app/experimental_children_v1.py \
     && python - <<'PY'
 from pathlib import Path
 import importlib.util
 
-required = [
-    '/app/multitrack_ground_truth_campaign.py',
-    '/app/mix_reconstruction_campaign.py',
-    '/app/synthetic_ground_truth_campaign.py',
-    '/app/experimental_ground_truth_campaign.py',
-    '/app/experimental_ground_truth_campaign_v2.py',
-    '/app/experimental_drum_refinement_campaign.py',
-    '/app/experimental_drum_disturbia_validation.py',
-    '/app/experimental_vocal_cascade_bakeoff.py',
-    '/app/drum_decomposition_v1.py',
-    '/app/ground_truth_benchmark.py',
-    '/app/research_bootstrap.py',
-    '/models/karaoke_bs_roformer/model.ckpt',
-    '/models/karaoke_bs_roformer/config.yaml',
-]
-for path in required:
-    assert Path(path).is_file(), path
+vocal = Path('/app/experimental_vocal_cross_song_validation.py').read_text(encoding='utf-8')
+children = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
 
-handler = Path('/app/handler.py').read_text(encoding='utf-8')
-assert 'multitrack_ground_truth_campaign' in handler
-assert 'build_multitrack_ground_truth_campaign' in handler
+assert 'experimental_vocal_cross_song_validation_v7' in vocal
+assert 'tears-for-fears-shout.zip' in vocal
+assert 'quality_sw25_mel75_to_becruily_residual_pair' in vocal
+assert 'fast_sw_to_becruily_residual_pair' in vocal
+assert 'current_set_residual_orientation' in vocal
+assert 'No further blend sweep is run' in vocal
 
-vocal_source = Path('/app/experimental_vocal_cascade_bakeoff.py').read_text(encoding='utf-8')
-assert 'experimental_vocal_cascade_bakeoff_v6' in vocal_source
-assert '_run_current_set_karaoke' in vocal_source
-assert "CURRENT_KARAOKE_CHECKPOINT = Path(\"/models/karaoke_bs_roformer/model.ckpt\")" in vocal_source
-assert 'ALT_VOCAL_PARENT = "mel_band_roformer_vocals_becruily.ckpt"' in vocal_source
-assert '_is_extended_vocal_reference' in vocal_source
-assert 'groups[-1].strip().lower() == token' in vocal_source
-assert 'native_assignment_matrix' in vocal_source
-assert 'SELECTED_LEAD_FILE=' in vocal_source
-assert 'set_current_flipped_residual_pair' in vocal_source
-assert 'becruily_parent_flipped_native_pair' in vocal_source
-assert 'becruily_parent_flipped_residual_pair' in vocal_source
-assert 'production_candidate_comparison' in vocal_source
-assert 'chas_lead_v2_averaged_parent_residual_pair' in vocal_source
-assert 'chas_lead_v2_blend_sw75_mel25_residual_pair' in vocal_source
-assert 'chas_lead_v2_blend_sw25_mel75_residual_pair' in vocal_source
-assert 'blend_sweep_comparison' in vocal_source
-assert 'chas_v2_comparison' in vocal_source
-assert 'vocal_parent_quality' in vocal_source
-assert 'becruily_direct_secondary_as_lead_v1' in vocal_source
-assert 'category, _warning = sgt.track_category(name)' not in vocal_source
-assert 'CURRENT_KARAOKE, sw_vocals_path, root / "set_karaoke"' not in vocal_source
+assert 'in_memory_hh_plus_cymbals_before_final_encode' in children
+assert '"hats": refined["hh"] + refined["cymbals"]' in children
+assert 'for name, audio in final_children.items()' in children
+assert 'for name in DRUM5:' not in children[children.find('final_children = {'):children.find('# Candidate B:')]
 
-for name in [
-    'synthetic_ground_truth_campaign',
-    'experimental_ground_truth_campaign',
-    'experimental_ground_truth_campaign_v2',
-    'experimental_drum_refinement_campaign',
-    'experimental_drum_disturbia_validation',
-    'experimental_vocal_cascade_bakeoff',
-]:
-    path = f'/app/{name}.py'
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert hasattr(module, 'run')
-print('focused Disturbia vocal cascade bakeoff v6 image verified')
+spec = importlib.util.spec_from_file_location('vocal_v7', '/app/experimental_vocal_cross_song_validation.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert hasattr(module, 'run')
+print('focused cross-song vocal validation v7 + in-memory hats merge verified')
 PY
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
