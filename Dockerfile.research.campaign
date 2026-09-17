@@ -1,12 +1,13 @@
 FROM ghcr.io/brrradley/litelabs-research-worker:b3848dea832b9b4bba956ba48668262c6d4018c4
 
 ENV PYTHONUNBUFFERED=1 \
-    LITELABS_RESEARCH_BUILD=mix-reconstruction-campaign
+    LITELABS_RESEARCH_BUILD=synthetic-ground-truth-campaign
 
-# Layer the current research entrypoints and campaign modules onto the known-good image.
+# Layer current research campaign modules onto the known-good research image.
 COPY handler.py /app/handler.py
 COPY multitrack_ground_truth_campaign.py /app/multitrack_ground_truth_campaign.py
 COPY mix_reconstruction_campaign.py /app/mix_reconstruction_campaign.py
+COPY synthetic_ground_truth_campaign.py /app/synthetic_ground_truth_campaign.py
 COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
 COPY research_bootstrap.py /app/research_bootstrap.py
 
@@ -14,25 +15,32 @@ RUN python -m py_compile \
         /app/handler.py \
         /app/multitrack_ground_truth_campaign.py \
         /app/mix_reconstruction_campaign.py \
+        /app/synthetic_ground_truth_campaign.py \
         /app/ground_truth_benchmark.py \
         /app/research_bootstrap.py \
     && python - <<'PY'
 from pathlib import Path
 import importlib.util
 
+required = [
+    '/app/multitrack_ground_truth_campaign.py',
+    '/app/mix_reconstruction_campaign.py',
+    '/app/synthetic_ground_truth_campaign.py',
+    '/app/ground_truth_benchmark.py',
+    '/app/research_bootstrap.py',
+]
+for path in required:
+    assert Path(path).is_file(), path
+
 handler = Path('/app/handler.py').read_text(encoding='utf-8')
 assert 'multitrack_ground_truth_campaign' in handler
-assert Path('/app/multitrack_ground_truth_campaign.py').is_file()
-assert Path('/app/mix_reconstruction_campaign.py').is_file()
+assert 'build_multitrack_ground_truth_campaign' in handler
 
-for name in ('multitrack_ground_truth_campaign', 'mix_reconstruction_campaign'):
-    path = f'/app/{name}.py'
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-assert hasattr(__import__('importlib'), 'util')
-print('research campaign image verified')
+spec = importlib.util.spec_from_file_location('synthetic_ground_truth_campaign', '/app/synthetic_ground_truth_campaign.py')
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+assert hasattr(module, 'run')
+print('synthetic ground-truth campaign image verified')
 PY
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
