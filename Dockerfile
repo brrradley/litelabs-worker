@@ -1,15 +1,18 @@
 FROM ghcr.io/brrradley/litelabs-worker:f6d1cbbff61f1c6ce9cf8d2001c2b9f2819db2c4
 
-ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+ARG LITELABS_BUILD_SHA=unknown
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    LITELABS_BUILD_SHA=${LITELABS_BUILD_SHA}
 
 WORKDIR /app
 
-# Increment from the last verified production image. It already contains the
-# current v3 preset/routing/QA/upload stack; this layer only promotes the locked
-# vocal benchmark and the in-memory hh+cymbals -> hats output policy.
+# Start QA from the repository's known v2 source instead of the already-patched
+# copy inherited from the base image. This makes the learning hotfix deterministic.
+COPY qa_research.py /app/qa_research.py
 COPY litelabs_drum_hats_compat_patch.py /app/litelabs_drum_hats_compat_patch.py
 COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.py
 COPY litelabs_qa_learning_hotfix.py /app/litelabs_qa_learning_hotfix.py
+COPY litelabs_build_identity_patch.py /app/litelabs_build_identity_patch.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
 
 # Bake the two Becruily MelBand models used by the locked benchmark so customer
@@ -83,13 +86,14 @@ for url, path, expected in ASSETS:
 print('Locked Becruily vocal benchmark models baked and verified')
 PY
 
-# Normalise the production image, then repair the silent QA telemetry inherited
-# from f6d1. QA is post-delivery research evidence and must never fail a finished
-# extraction because learning_observation was not initialised.
+# Apply production changes to known source files. QA is deliberately reset above
+# before its hotfix so an inherited partial patch cannot leave a local variable
+# defined only on some code paths.
 RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_locked_vocal_hats_patch.py \
     && python /app/litelabs_qa_learning_hotfix.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_qa_learning_hotfix.py \
+    && python /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -99,6 +103,7 @@ from preset_pack import PRESETS, STEM_LABELS, preset_capabilities
 
 source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
 qa_source = Path('/app/qa_research.py').read_text(encoding='utf-8')
+handler_source = Path('/app/handler.py').read_text(encoding='utf-8')
 benchmark = json.loads(Path('/app/benchmarks/vocal_benchmark_v1.json').read_text(encoding='utf-8'))
 
 assert benchmark['benchmark_id'] == 'vocal_benchmark_v1'
@@ -129,12 +134,14 @@ assert 'Hats' in experimental['stems']
 assert 'Hi-Hats' not in experimental['stems']
 assert 'Cymbals' not in experimental['stems']
 
-# Regression guard for the production failure e9532db0...-e2.
+# Static regression guards for the production UnboundLocalError.
 assert 'learning_observation = {' in qa_source
 assert '"learning_observation": learning_observation' in qa_source
 assert qa_source.index('learning_observation = {') < qa_source.index('"learning_observation": learning_observation')
 assert '"drum_children": ("kick", "snare", "toms", "hats")' in qa_source
 assert '"drums_5stem_hats" in lower' in source
+assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
+assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
 
 # Required frozen assets.
 for path in (
@@ -145,12 +152,56 @@ for path in (
 ):
     assert Path(path).is_file(), path
 
-print('LiteLABS locked vocal benchmark + hats + QA learning hotfix verified')
+print('LiteLABS locked vocal benchmark + hats + deterministic QA + build identity verified')
+PY
+
+# Execute the QA function on real temporary audio during the image build. Static
+# string checks were not enough to catch the previous local-variable failure.
+RUN python - <<'PY'
+import sys
+import tempfile
+from pathlib import Path
+import numpy as np
+import soundfile as sf
+sys.path.insert(0, '/app')
+from qa_research import build_research_qa
+
+with tempfile.TemporaryDirectory(prefix='qa-smoke-') as td:
+    root = Path(td)
+    sr = 8000
+    t = np.arange(sr, dtype=np.float32) / sr
+    vocals = (0.05 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    other = (0.03 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    source = vocals + other
+    source_path = root / 'source.wav'
+    vocals_path = root / 'vocals.wav'
+    other_path = root / 'other.wav'
+    sf.write(source_path, np.column_stack([source, source]), sr, subtype='FLOAT')
+    sf.write(vocals_path, np.column_stack([vocals, vocals]), sr, subtype='FLOAT')
+    sf.write(other_path, np.column_stack([other, other]), sr, subtype='FLOAT')
+    qa = build_research_qa(
+        source=source_path,
+        stems={'vocals': vocals_path, 'other': other_path},
+        model_by_stem={'vocals': 'smoke', 'other': 'smoke'},
+        filename='smoke.wav',
+        input_size_bytes=source_path.stat().st_size,
+        input_format='wav',
+        genre='test',
+        preset='experimental',
+        pipeline_revision='build-smoke',
+        extra={'timings_seconds': {'smoke': 0.1}},
+        genre_reason='build test',
+    )
+    assert qa['learning_observation']['phase'] == 'post_delivery'
+    assert qa['learning_observation']['recipe']['preset'] == 'experimental'
+    assert qa['source_metrics']['active_ratio'] >= 0
+print('QA runtime smoke test passed')
 PY
 
 # Smoke-test the real final handler startup path without entering RunPod's
 # blocking serverless loop.
 RUN python - <<'PY'
+import os
 import runpy
 import runpod.serverless
 captured = {}
@@ -159,11 +210,14 @@ def fake_start(config):
     captured['config'] = config
 runpod.serverless.start = fake_start
 try:
-    runpy.run_path('/app/handler.py', run_name='__main__')
+    ns = runpy.run_path('/app/handler.py', run_name='__main__')
 finally:
     runpod.serverless.start = original_start
-assert callable((captured.get('config') or {}).get('handler'))
-print('LiteLABS serverless boot smoke test passed')
+handler = (captured.get('config') or {}).get('handler')
+assert callable(handler)
+health = handler({'input': {'healthcheck': True}})
+assert health.get('build_sha') == os.environ.get('LITELABS_BUILD_SHA', 'unknown')
+print('LiteLABS serverless boot + build identity smoke test passed')
 PY
 
 CMD ["python", "-u", "/app/handler.py"]
