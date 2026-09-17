@@ -9,6 +9,7 @@ WORKDIR /app
 # vocal benchmark and the in-memory hh+cymbals -> hats output policy.
 COPY litelabs_drum_hats_compat_patch.py /app/litelabs_drum_hats_compat_patch.py
 COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.py
+COPY litelabs_qa_learning_hotfix.py /app/litelabs_qa_learning_hotfix.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
 
 # Bake the two Becruily MelBand models used by the locked benchmark so customer
@@ -82,13 +83,13 @@ for url, path, expected in ASSETS:
 print('Locked Becruily vocal benchmark models baked and verified')
 PY
 
-# The verified production image has evolved through several patch generations,
-# so normalise its DrumSep export loop first. This compatibility patch accepts
-# either the older loaded[name][:dn] form or the refined[name] form and writes
-# the same final kick/snare/toms/hats policy.
+# Normalise the production image, then repair the silent QA telemetry inherited
+# from f6d1. QA is post-delivery research evidence and must never fail a finished
+# extraction because learning_observation was not initialised.
 RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_locked_vocal_hats_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py \
+    && python /app/litelabs_qa_learning_hotfix.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_qa_learning_hotfix.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -97,6 +98,7 @@ sys.path.insert(0, '/app')
 from preset_pack import PRESETS, STEM_LABELS, preset_capabilities
 
 source = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
+qa_source = Path('/app/qa_research.py').read_text(encoding='utf-8')
 benchmark = json.loads(Path('/app/benchmarks/vocal_benchmark_v1.json').read_text(encoding='utf-8'))
 
 assert benchmark['benchmark_id'] == 'vocal_benchmark_v1'
@@ -127,6 +129,13 @@ assert 'Hats' in experimental['stems']
 assert 'Hi-Hats' not in experimental['stems']
 assert 'Cymbals' not in experimental['stems']
 
+# Regression guard for the production failure e9532db0...-e2.
+assert 'learning_observation = {' in qa_source
+assert '"learning_observation": learning_observation' in qa_source
+assert qa_source.index('learning_observation = {') < qa_source.index('"learning_observation": learning_observation')
+assert '"drum_children": ("kick", "snare", "toms", "hats")' in qa_source
+assert '"drums_5stem_hats" in lower' in source
+
 # Required frozen assets.
 for path in (
     '/models/audio_separator/config_vocals_becruily.yaml',
@@ -136,7 +145,7 @@ for path in (
 ):
     assert Path(path).is_file(), path
 
-print('LiteLABS locked vocal benchmark v1 + merged hats production image verified')
+print('LiteLABS locked vocal benchmark + hats + QA learning hotfix verified')
 PY
 
 # Smoke-test the real final handler startup path without entering RunPod's
