@@ -1,7 +1,7 @@
 FROM ghcr.io/brrradley/litelabs-research-worker:b3848dea832b9b4bba956ba48668262c6d4018c4
 
 ENV PYTHONUNBUFFERED=1 \
-    LITELABS_RESEARCH_BUILD=experimental-ground-truth-campaign-v2
+    LITELABS_RESEARCH_BUILD=experimental-drum-refinement-campaign
 
 # Layer current research campaign modules onto the known-good research image.
 COPY handler.py /app/handler.py
@@ -10,6 +10,7 @@ COPY mix_reconstruction_campaign.py /app/mix_reconstruction_campaign.py
 COPY synthetic_ground_truth_campaign.py /app/synthetic_ground_truth_campaign.py
 COPY experimental_ground_truth_campaign.py /app/experimental_ground_truth_campaign.py
 COPY experimental_ground_truth_campaign_v2.py /app/experimental_ground_truth_campaign_v2.py
+COPY experimental_drum_refinement_campaign.py /app/experimental_drum_refinement_campaign.py
 COPY drum_decomposition_v1.py /app/drum_decomposition_v1.py
 COPY ground_truth_benchmark.py /app/ground_truth_benchmark.py
 COPY research_bootstrap.py /app/research_bootstrap.py
@@ -21,6 +22,7 @@ RUN python -m py_compile \
         /app/synthetic_ground_truth_campaign.py \
         /app/experimental_ground_truth_campaign.py \
         /app/experimental_ground_truth_campaign_v2.py \
+        /app/experimental_drum_refinement_campaign.py \
         /app/drum_decomposition_v1.py \
         /app/ground_truth_benchmark.py \
         /app/research_bootstrap.py \
@@ -34,6 +36,7 @@ required = [
     '/app/synthetic_ground_truth_campaign.py',
     '/app/experimental_ground_truth_campaign.py',
     '/app/experimental_ground_truth_campaign_v2.py',
+    '/app/experimental_drum_refinement_campaign.py',
     '/app/drum_decomposition_v1.py',
     '/app/ground_truth_benchmark.py',
     '/app/research_bootstrap.py',
@@ -45,13 +48,18 @@ handler = Path('/app/handler.py').read_text(encoding='utf-8')
 assert 'multitrack_ground_truth_campaign' in handler
 assert 'build_multitrack_ground_truth_campaign' in handler
 
-for name in ['synthetic_ground_truth_campaign', 'experimental_ground_truth_campaign', 'experimental_ground_truth_campaign_v2']:
+for name in [
+    'synthetic_ground_truth_campaign',
+    'experimental_ground_truth_campaign',
+    'experimental_ground_truth_campaign_v2',
+    'experimental_drum_refinement_campaign',
+]:
     path = f'/app/{name}.py'
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert hasattr(module, 'run')
-print('experimental ground-truth v2 campaign image verified')
+print('experimental drum refinement campaign image verified')
 PY
 
 CMD ["python", "-u", "/app/research_bootstrap.py"]
