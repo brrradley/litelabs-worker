@@ -1,0 +1,39 @@
+{
+  "benchmark_id": "vocal_benchmark_v1",
+  "status": "locked",
+  "locked_at": "2026-09-17",
+  "source": {
+    "track": "Rihanna - Disturbia",
+    "archive_url": "https://literecords.com/tmp/disturbia_test.zip",
+    "sample_rate": 44100,
+    "exact_partition": true,
+    "peak_absolute_error": 5.960464477539063e-08,
+    "rms_error": 3.4142968401896416e-09
+  },
+  "locked_recipes": {
+    "vocals_parent": {
+      "recipe": "BS-RoFormer-SW vocals",
+      "quality_score": 75.44
+    },
+    "lead_vocals": {
+      "recipe": "25% BS-RoFormer-SW vocals + 75% MelBand Becruily vocals -> Becruily MelBand Karaoke Vocals",
+      "quality_score": 65.48,
+      "blend_weights": {"bs_roformer_sw": 0.25, "melband_becruily": 0.75}
+    },
+    "backing_vocals": {
+      "recipe": "BS-RoFormer-SW vocals -> Becruily MelBand Karaoke Vocals as fast lead; backing = SW vocal parent - fast lead",
+      "strict_quality_score": 19.77,
+      "inclusive_quality_score": 18.18,
+      "route_reconstruction_cosine": 1.0
+    }
+  },
+  "production_policy": {
+    "use_best_stem_recipe_independently": true,
+    "lead_and_backing_share_one_mass_conserving_pair": false
+  },
+  "drums_output_policy": {
+    "internal_model_outputs": ["kick", "snare", "toms", "hh", "cymbals"],
+    "customer_outputs": ["kick", "snare", "toms", "hats"],
+    "hats_recipe": "hh + cymbals in memory before final encoding"
+  }
+}
