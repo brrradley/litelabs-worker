@@ -11,6 +11,7 @@ WORKDIR /app
 COPY qa_research.py /app/qa_research.py
 COPY litelabs_drum_hats_compat_patch.py /app/litelabs_drum_hats_compat_patch.py
 COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.py
+COPY litelabs_vocal_duplicate_guard_patch.py /app/litelabs_vocal_duplicate_guard_patch.py
 COPY litelabs_qa_learning_hotfix.py /app/litelabs_qa_learning_hotfix.py
 COPY litelabs_build_identity_patch.py /app/litelabs_build_identity_patch.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
@@ -91,9 +92,10 @@ PY
 # defined only on some code paths.
 RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_locked_vocal_hats_patch.py \
+    && python /app/litelabs_vocal_duplicate_guard_patch.py \
     && python /app/litelabs_qa_learning_hotfix.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -119,6 +121,9 @@ assert 'mel_band_roformer_vocals_becruily.ckpt' in source
 assert source.count('mel_band_roformer_karaoke_becruily.ckpt') >= 2
 assert 'best_backing = fast_parent - fast_lead' in source
 assert 'best_stems_share_single_parent_pair' in source
+assert 'suppressed_as_gain_scaled_duplicate' in source
+assert 'gain_scaled_duplicate_of_lead' in source
+assert '"backing_detected": bool(duplicate_analysis["backing_detected"])' in source
 
 # HH and cymbals remain one DrumSep inference but are merged before encoding.
 assert 'in_memory_hh_plus_cymbals_before_final_encode' in source
@@ -139,6 +144,9 @@ assert 'learning_observation = {' in qa_source
 assert '"learning_observation": learning_observation' in qa_source
 assert qa_source.index('learning_observation = {') < qa_source.index('"learning_observation": learning_observation')
 assert '"drum_children": ("kick", "snare", "toms", "hats")' in qa_source
+assert 'heuristic_stem_confidence_v3' in qa_source
+assert 'confidence_not_fidelity' in qa_source
+assert 'complement_residual' in qa_source
 assert '"drums_5stem_hats" in lower' in source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
