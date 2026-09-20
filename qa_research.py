@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-QA_VERSION = 2
+QA_VERSION = 3
 
 PARENT_STEMS = ("vocals", "percussion", "bass", "strings", "keys", "other")
 CHILD_GROUPS = {
@@ -284,8 +284,20 @@ def build_research_qa(
         score, components, cap_reasons = _stem_score(
             metrics[name], distinctness, reconstruction, leakage_corr
         )
+        semantic_role = (
+            "complement_residual"
+            if name in {"wind_brass_residual", "sax_residual"}
+            else "child_stem"
+            if name in stem_to_group
+            else "derived_stem"
+            if name == "instrumental"
+            else "parent_stem"
+            if name in PARENT_STEMS
+            else "other"
+        )
         stem_records[name] = {
             "model": model_by_stem.get(name, "unknown"),
+            "semantic_role": semantic_role,
             "score": score,
             "components": components,
             "metrics": metrics[name],
@@ -297,7 +309,8 @@ def build_research_qa(
 
     record = {
         "qa_version": QA_VERSION,
-        "score_type": "heuristic_research_signal_v2",
+        "score_type": "heuristic_stem_confidence_v3",
+        "score_interpretation": "QA confidence/routing evidence; not an audible-fidelity percentage or studio-ground-truth accuracy estimate",
         "ground_truth_available": False,
         "job_id": job_id,
         "filename": filename,
@@ -316,6 +329,8 @@ def build_research_qa(
             "technical_health_weight": 0.10,
             "peer_group_aware": True,
             "hard_quality_caps": True,
+            "score_semantics": "confidence_not_fidelity",
+            "residuals_are_complements": True,
         },
         "group_reconstruction": {
             key: round(value, 6) if value is not None else None
