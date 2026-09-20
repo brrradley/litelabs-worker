@@ -12,6 +12,8 @@ COPY qa_research.py /app/qa_research.py
 COPY litelabs_drum_hats_compat_patch.py /app/litelabs_drum_hats_compat_patch.py
 COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.py
 COPY litelabs_vocal_duplicate_guard_patch.py /app/litelabs_vocal_duplicate_guard_patch.py
+COPY multilead_research.py /app/multilead_research.py
+COPY litelabs_multilead_research_patch.py /app/litelabs_multilead_research_patch.py
 COPY litelabs_qa_learning_hotfix.py /app/litelabs_qa_learning_hotfix.py
 COPY litelabs_build_identity_patch.py /app/litelabs_build_identity_patch.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
@@ -87,6 +89,46 @@ for url, path, expected in ASSETS:
 print('Locked Becruily vocal benchmark models baked and verified')
 PY
 
+# Research-only MedleyVox duet/co-lead experiment. Production/main never sees
+# these dependencies or weights. The model runs at 24 kHz and is used only when
+# input.research_multi_lead=true on the research image.
+RUN python -m pip install --no-cache-dir "asteroid==0.7.0" "pyloudnorm>=0.1.1" "praat-parselmouth>=0.4.5" \
+    && rm -rf /opt/medleyvox \
+    && git clone https://github.com/SUC-DriverOld/MedleyVox-Inference-WebUI.git /opt/medleyvox \
+    && cd /opt/medleyvox \
+    && git checkout 16a2f1d484226b6774439e13bc354f8ef1e7b240 \
+    && mkdir -p "/models/medleyvox/vocals 238" \
+    && python - <<'PY'
+from pathlib import Path
+import hashlib
+import requests
+
+assets = [
+    (
+        "https://huggingface.co/Cyru5/MedleyVox/resolve/main/vocals%20238/vocals.json?download=true",
+        Path("/models/medleyvox/vocals 238/vocals.json"),
+        None,
+    ),
+    (
+        "https://huggingface.co/Cyru5/MedleyVox/resolve/main/vocals%20238/vocals.pth?download=true",
+        Path("/models/medleyvox/vocals 238/vocals.pth"),
+        "793a3cbdadfdee2f833301d925938cd184f08b79d53a7e65c7ff01d5f2c6b4d5",
+    ),
+]
+for url, path, expected in assets:
+    with requests.get(url, stream=True, timeout=(30, 1800)) as response:
+        response.raise_for_status()
+        with path.open("wb") as handle:
+            for chunk in response.iter_content(4 * 1024 * 1024):
+                if chunk:
+                    handle.write(chunk)
+    if expected:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != expected:
+            raise RuntimeError(f"MedleyVox SHA256 mismatch for {path.name}: {digest}")
+print("Research MedleyVox model downloaded and verified")
+PY
+
 # Apply production changes to known source files. QA is deliberately reset above
 # before its hotfix so an inherited partial patch cannot leave a local variable
 # defined only on some code paths.
@@ -94,8 +136,9 @@ RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_locked_vocal_hats_patch.py \
     && python /app/litelabs_vocal_duplicate_guard_patch.py \
     && python /app/litelabs_qa_learning_hotfix.py \
+    && python /app/litelabs_multilead_research_patch.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -147,6 +190,9 @@ assert '"drum_children": ("kick", "snare", "toms", "hats")' in qa_source
 assert 'heuristic_stem_confidence_v3' in qa_source
 assert 'confidence_not_fidelity' in qa_source
 assert 'complement_residual' in qa_source
+assert 'research_multi_lead' in source
+assert 'multi_lead_medleyvox' in source
+assert '"multi_lead_children": ("lead_vocals_a", "lead_vocals_b")' in qa_source
 assert '"drums_5stem_hats" in lower' in source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
