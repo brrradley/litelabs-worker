@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import tempfile
 import time
@@ -11,7 +10,6 @@ from urllib.parse import unquote, urlparse
 
 import numpy as np
 import soundfile as sf
-import torch
 
 from routed_extraction_v1 import _collect_named_outputs, _collect_sw_stems, _copy_as_flac, _db, _read, _safe_name, _write_flac
 from sw_residual_allocator import STEMS as SW_STEMS, _download, _resolve_model_files
@@ -48,71 +46,41 @@ def _copy_audio_tree(source_root: Path, destination_root: Path, prefix: str) -> 
     return copied
 
 
-def _wiener_kick(parent: np.ndarray, children: dict[str, np.ndarray], n_fft: int = 2048, hop: int = 512) -> np.ndarray:
-    """Return only the conservative p=1 Wiener-refined kick from the drums parent."""
-    n = min([len(parent)] + [len(children[name]) for name in DRUM5])
-    p = np.asarray(parent[:n], dtype=np.float32)
-    c = {name: np.asarray(children[name][:n], dtype=np.float32) for name in DRUM5}
-    window = torch.hann_window(n_fft, periodic=True)
-    result = np.zeros_like(p, dtype=np.float32)
-    eps = 1e-10
-    with torch.no_grad():
-        for ch in range(p.shape[1]):
-            parent_t = torch.from_numpy(p[:, ch])
-            parent_spec = torch.stft(parent_t, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=window, center=True, return_complex=True)
-            mags = []
-            for name in DRUM5:
-                stem_t = torch.from_numpy(c[name][:, ch])
-                stem_spec = torch.stft(stem_t, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=window, center=True, return_complex=True)
-                mags.append(torch.abs(stem_spec).clamp_min(eps))
-            denom = torch.stack(mags, dim=0).sum(dim=0).clamp_min(eps)
-            kick_mask = mags[0] / denom
-            kick_spec = parent_spec * kick_mask
-            wav = torch.istft(kick_spec, n_fft=n_fft, hop_length=hop, win_length=n_fft, window=window, center=True, length=n)
-            result[:, ch] = wav.cpu().numpy().astype(np.float32)
-    return result
-
-
-def _apply_mass_conserving_kick_refinement(parent: np.ndarray, children: dict[str, np.ndarray]) -> tuple[dict[str, np.ndarray], dict]:
-    """Replace only kick with the proven mild Wiener version and preserve the drums parent exactly.
-
-    The correction required after replacing kick is redistributed across the four untouched
-    children according to their instantaneous energy. This keeps the refined kick intact while
-    avoiding a global Wiener pass that our supervised tests showed can hurt snare and hi-hat.
-    """
-    n = min([len(parent)] + [len(children[name]) for name in DRUM5])
-    parent_n = np.asarray(parent[:n], dtype=np.float32)
-    baseline = {name: np.asarray(children[name][:n], dtype=np.float32).copy() for name in DRUM5}
-    refined_kick = _wiener_kick(parent_n, baseline, n_fft=2048, hop=512)
-
-    out = {name: audio.copy() for name, audio in baseline.items()}
-    out["kick"] = refined_kick
-    others = [name for name in DRUM5 if name != "kick"]
-
-    current_sum = np.sum(np.stack([out[name] for name in DRUM5], axis=0), axis=0)
-    correction = parent_n - current_sum
-    energies = np.stack([np.square(baseline[name], dtype=np.float32) for name in others], axis=0)
-    denom = np.sum(energies, axis=0)
-    tiny = 1e-12
-    weights = energies / np.maximum(denom[None, ...], tiny)
-    silent = denom <= tiny
-    if np.any(silent):
-        weights[:, silent] = 1.0 / len(others)
-    for idx, name in enumerate(others):
-        out[name] = out[name] + correction * weights[idx]
-
-    rebuilt = np.sum(np.stack([out[name] for name in DRUM5], axis=0), axis=0)
-    residual = parent_n - rebuilt
-    parent_rms = float(np.sqrt(np.mean(parent_n * parent_n) + 1e-12))
-    residual_rms = float(np.sqrt(np.mean(residual * residual) + 1e-12))
-    kick_delta_rms = float(np.sqrt(np.mean((refined_kick - baseline["kick"]) ** 2) + 1e-12))
-    return out, {
-        "applied": True,
-        "method": "kick_only_wiener_p1_fft2048_mass_conserving",
-        "kick_delta_rms": kick_delta_rms,
-        "parent_vs_children_sum_cosine": round(float(_cos(parent_n, rebuilt)), 6),
-        "residual_relative_to_parent_db": _db(residual_rms / max(parent_rms, 1e-12)),
+def _write_readme(final: Path, track: str, timings: dict[str, float], models: dict[str, str]) -> None:
+    labels = {
+        "bs_roformer": "BS-RoFormer parent separation",
+        "drumsep_5stem": "DrumSep 5-stem separation",
+        "wind_uvr": "Wind family separation",
+        "sax_demucs": "Saxophone specialist separation",
+        "mega53": "Mega53 separation",
     }
+    lines = [
+        "LiteLABS Experimental Child Stem Pack",
+        "====================================",
+        "",
+        f"Track: {track}",
+        "",
+        "QUALITY BASELINE",
+        "----------------",
+        "The FLAC files in the root of this archive are the untouched BS-RoFormer-SW parent stems.",
+        "Experimental child stems are stored only inside /experimental/ and do not replace their parent stems.",
+        "",
+        "EXPERIMENTAL MODELS",
+        "-------------------",
+    ]
+    for family, model in models.items():
+        lines.append(f"{family.title()}: {model}")
+    lines.extend(["", "SEPARATION DURATIONS", "--------------------"])
+    for key, value in timings.items():
+        if key in labels:
+            lines.append(f"{labels[key]}: {float(value):.1f}s")
+    lines.extend([
+        "",
+        "These durations cover the individual separation stages only and exclude queue time.",
+        "Experimental stems are retained for A/B quality evaluation until they meet or exceed the parent-stem quality bar.",
+        "",
+    ])
+    (final / "README.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
 def build_experimental_children_v1(payload: dict, progress=None) -> dict:
@@ -164,13 +132,16 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
         _download(audio_url, downloaded)
         timings["download"] = round(time.monotonic() - t0, 3)
 
+        emit("Preparing source audio", 6)
         source = srcdir / f"{track}.wav"
+        t0 = time.monotonic()
         with (logs / "ffmpeg.log").open("w", encoding="utf-8") as log:
             conv = subprocess.run(["ffmpeg", "-y", "-i", str(downloaded), "-ar", "44100", "-ac", "2", str(source)], stdout=log, stderr=subprocess.STDOUT, text=True, timeout=300)
+        timings["convert"] = round(time.monotonic() - t0, 3)
         if conv.returncode != 0:
             return {"ok": False, "mode": MODE, "failed_stage": "convert"}
 
-        emit("Running BS-RoFormer parent separation", 10)
+        emit("Running BS-RoFormer Parent Separation", 10)
         rc, elapsed = _run_polled(
             ["bs-roformer-infer", "--config_path", str(sw_config), "--model_path", str(sw_checkpoint), "--input_folder", str(srcdir), "--store_dir", str(swout)],
             cwd=None, timeout=timeout, log_path=logs / "sw.log", progress=None,
@@ -185,7 +156,6 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
         if missing:
             return {"ok": False, "mode": MODE, "failed_stage": "collect_parents", "missing": missing}
 
-        # Quality baseline: untouched BS-RoFormer parents remain at ZIP root.
         for stem in SW_STEMS:
             _copy_as_flac(stems[stem], final / f"{track}_{stem}.flac")
         mixture, mix_sr = _read(source)
@@ -193,8 +163,7 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
         n = min(len(mixture), len(vocals))
         _write_flac(final / f"{track}_instrumental.flac", mixture[:n] - vocals[:n], mix_sr)
 
-        # Experimental drums: current 5-stem DrumSep plus targeted, supervised kick refinement.
-        emit("Running DrumSep 5-Stem Experiment", 32)
+        emit("Running DrumSep 5-Stem Decomposition", 32)
         drums, drum_sr = _read(stems["drums"])
         sf.write(drum_in / "drums.wav", drums.astype(np.float32), drum_sr, subtype="FLOAT")
         rc, elapsed = _run_polled(
@@ -210,26 +179,22 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
             if len(loaded) == len(DRUM5):
                 dn = min([len(drums)] + [len(a) for a in loaded.values()])
                 parent = drums[:dn]
-                baseline = {name: loaded[name][:dn] for name in DRUM5}
-                baseline_sum = np.sum(np.stack([baseline[name] for name in DRUM5], axis=0), axis=0)
-                baseline_residual = parent - baseline_sum
+                child_sum = np.sum(np.stack([loaded[name][:dn] for name in DRUM5], axis=0), axis=0)
+                residual = parent - child_sum
                 parent_rms = float(np.sqrt(np.mean(parent * parent) + 1e-12))
-                baseline_residual_rms = float(np.sqrt(np.mean(baseline_residual * baseline_residual) + 1e-12))
-                refined, kick_refinement = _apply_mass_conserving_kick_refinement(parent, baseline)
+                residual_rms = float(np.sqrt(np.mean(residual * residual) + 1e-12))
                 drum_report.update({
-                    "baseline_parent_vs_children_sum_cosine": round(float(_cos(parent, baseline_sum)), 6),
-                    "baseline_residual_relative_to_parent_db": _db(baseline_residual_rms / max(parent_rms, 1e-12)),
-                    "kick_refinement": kick_refinement,
+                    "parent_vs_children_sum_cosine": round(float(_cos(parent, child_sum)), 6),
+                    "residual_relative_to_parent_db": _db(residual_rms / max(parent_rms, 1e-12)),
                 })
                 for name in DRUM5:
                     dest = experimental / f"{track}_drums_5stem_{name}.flac"
-                    _write_flac(dest, refined[name], drum_sr)
+                    _write_flac(dest, loaded[name][:dn], drum_sr)
                     drum_report["files"].append(dest.name)
             else:
                 drum_report["missing"] = [name for name in DRUM5 if name not in loaded]
 
-        # Candidate B: family-level UVR Wind extraction from the RoFormer Other parent.
-        emit("Running Wind Family Experiment", 56)
+        emit("Running Wind Family Separation", 56)
         other_parent = root / "other_parent.flac"
         _copy_as_flac(stems["other"], other_parent)
         t0 = time.monotonic()
@@ -238,38 +203,35 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
         timings["wind_uvr"] = round(time.monotonic() - t0, 3)
         wind_files = _copy_audio_tree(wind_out, experimental, f"{track}_wind_uvr") if wind.returncode == 0 else []
 
-        # Candidate C: dedicated saxophone model. It is evaluated beside the family stem, not promoted automatically.
-        emit("Running Saxophone Specialist Experiment", 74)
+        emit("Running Saxophone Specialist Separation", 74)
         t0 = time.monotonic()
         sax_cmd = ["python", "-m", "demucs", "--repo", str(SAX_MODEL_DIR), "-n", SAX_MODEL, "-o", str(sax_out), str(other_parent)]
         sax = subprocess.run(sax_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
         timings["sax_demucs"] = round(time.monotonic() - t0, 3)
         sax_files = _copy_audio_tree(sax_out, experimental, f"{track}_sax_specialist") if sax.returncode == 0 else []
 
+        models = {
+            "parent": "BS-RoFormer-SW",
+            "drums": "MDX23C DrumSep 5-stem (aufr33/jarredou)",
+            "wind": WIND_MODEL,
+            "saxophone": SAX_MODEL,
+        }
         report = {
             "schema_version": 2,
             "mode": MODE,
             "quality_baseline": "BS-RoFormer-SW parent stems at ZIP root",
-            "experimental_policy": "Children remain experimental; drums use the validated 5-stem path with kick-only mild Wiener refinement and mass-conserving compensation.",
-            "models": {
-                "drums": "MDX23C DrumSep 5-stem mirror (aufr33/jarredou) + kick-only Wiener p=1 FFT2048",
-                "wind": WIND_MODEL,
-                "saxophone": SAX_MODEL,
-            },
+            "experimental_policy": "Children are comparison-only and never replace parent stems in this mode",
+            "models": models,
             "drums_5stem": drum_report,
             "wind": {"ok": wind.returncode == 0, "files": wind_files, "runtime_tail": "\n".join((wind.stdout or "").splitlines()[-25:]) if wind.returncode else ""},
             "saxophone": {"ok": sax.returncode == 0, "files": sax_files, "runtime_tail": "\n".join((sax.stdout or "").splitlines()[-25:]) if sax.returncode else ""},
             "sw_auto_installed": bool(sw_installed),
             "timings_seconds": timings,
-            "licensing": {
-                "drumsep_5stem": "research only; original checkpoint terms unresolved",
-                "wind_uvr": "research pending provenance/license confirmation despite public mirrors",
-                "sax_demucs": "model card currently tagged MIT",
-            },
         }
+        _write_readme(final, track, timings, models)
         (final / f"{track}_EXPERIMENTAL_REPORT.json").write_text(json.dumps(_json_safe(report), indent=2), encoding="utf-8")
 
-        emit("Packaging parent and experimental stems", 94)
+        emit("Packaging Parent and Experimental Stems", 92)
         archive = root / f"{track}_parent_plus_experimental.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
             for p in sorted(final.rglob("*")):
@@ -279,6 +241,7 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
         uploaded = False
         put_url = str(payload.get("result_put_url") or "").strip()
         if put_url:
+            emit("Uploading Stem Pack", 96)
             import requests
             with archive.open("rb") as handle:
                 response = requests.put(put_url, data=handle, headers={"Content-Type": "application/zip"}, timeout=(30, 1800))
@@ -286,7 +249,7 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
             uploaded = True
 
         timings["total"] = round(time.monotonic() - started, 3)
-        emit("Experimental child comparison complete", 100)
+        emit("Stem Extraction Complete", 100)
         return _json_safe({
             "ok": True,
             "mode": MODE,

@@ -10,83 +10,26 @@
     "peak_absolute_error": 5.960464477539063e-08,
     "rms_error": 3.4142968401896416e-09
   },
-  "reference_definition": {
-    "lead": ["lead vocal"],
-    "backing_strict": ["background vocal"],
-    "backing_inclusive": [
-      "background vocal",
-      "breath_01",
-      "robot_01",
-      "scream_01",
-      "pitched voc1_01",
-      "pitched voc2_01"
-    ]
-  },
   "locked_recipes": {
     "vocals_parent": {
       "recipe": "BS-RoFormer-SW vocals",
-      "model": "BS-Roformer-SW.ckpt",
-      "quality_score": 75.44,
-      "si_sdr_db": 4.382,
-      "correlation": 0.856045,
-      "spectral_similarity": 0.901355
+      "quality_score": 75.44
     },
     "lead_vocals": {
-      "recipe": "25% BS-RoFormer-SW vocals + 75% MelBand Becruily vocals -> Becruily MelBand Karaoke Vocals output",
-      "models": [
-        "BS-Roformer-SW.ckpt",
-        "mel_band_roformer_vocals_becruily.ckpt",
-        "mel_band_roformer_karaoke_becruily.ckpt"
-      ],
-      "blend_weights": {
-        "bs_roformer_sw": 0.25,
-        "melband_becruily": 0.75
-      },
+      "recipe": "25% BS-RoFormer-SW vocals + 75% MelBand Becruily vocals -> Becruily MelBand Karaoke Vocals",
       "quality_score": 65.48,
-      "si_sdr_db": 0.702,
-      "correlation": 0.735069,
-      "spectral_similarity": 0.868001,
-      "incremental_runtime_seconds_beyond_existing_sw_parent": 55.331
+      "blend_weights": {"bs_roformer_sw": 0.25, "melband_becruily": 0.75}
     },
     "backing_vocals": {
-      "recipe": "BS-RoFormer-SW vocals -> Becruily MelBand Karaoke Vocals output as fast lead; backing = SW vocal parent - fast lead",
-      "models": [
-        "BS-Roformer-SW.ckpt",
-        "mel_band_roformer_karaoke_becruily.ckpt"
-      ],
+      "recipe": "BS-RoFormer-SW vocals -> Becruily MelBand Karaoke Vocals as fast lead; backing = SW vocal parent - fast lead",
       "strict_quality_score": 19.77,
       "inclusive_quality_score": 18.18,
-      "incremental_runtime_seconds_beyond_existing_sw_parent": 34.073,
       "route_reconstruction_cosine": 1.0
-    }
-  },
-  "comparison": {
-    "current_set": {
-      "lead_quality": 57.96,
-      "backing_strict_quality": 13.54,
-      "backing_inclusive_quality": 12.09,
-      "composite": 39.612,
-      "runtime_seconds": 71.236
-    },
-    "fast_sw_to_becruily": {
-      "lead_quality": 57.79,
-      "backing_strict_quality": 19.77,
-      "backing_inclusive_quality": 18.18,
-      "composite": 41.946,
-      "runtime_seconds": 34.073
-    },
-    "quality_sw25_mel75_to_becruily": {
-      "lead_quality": 65.48,
-      "backing_strict_quality": 17.05,
-      "backing_inclusive_quality": 15.58,
-      "composite": 45.52,
-      "runtime_seconds": 55.331
     }
   },
   "production_policy": {
     "use_best_stem_recipe_independently": true,
-    "lead_and_backing_share_one_mass_conserving_pair": false,
-    "note": "Lead and backing are intentionally selected from different validated routes. Each route is mass-conserving against its own parent, but the exported best-lead and best-backing stems are not asserted to sum exactly to the SW vocal parent."
+    "lead_and_backing_share_one_mass_conserving_pair": false
   },
   "drums_output_policy": {
     "internal_model_outputs": ["kick", "snare", "toms", "hh", "cymbals"],

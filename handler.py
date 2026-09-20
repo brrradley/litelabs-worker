@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
 import runpod
 
-print("LiteLABS research worker booting", flush=True)
+print("LiteLABS worker booting", flush=True)
+
+_GENRE_PATCHED = False
 
 
-def post_progress(url, token, job_id, message: str, percent: int) -> None:
+def is_enabled(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def post_progress(url: str | None, token: str | None, job_id: str | int | None, message: str, percent: int) -> None:
     print(f"LiteLABS progress {percent}%: {message}", flush=True)
     if not url or not token or not job_id:
         return
@@ -23,7 +31,7 @@ def post_progress(url, token, job_id, message: str, percent: int) -> None:
 
 
 def download_file(url: str, destination: Path) -> None:
-    with requests.get(url, stream=True, timeout=180) as response:
+    with requests.get(url, stream=True, timeout=120) as response:
         response.raise_for_status()
         with destination.open("wb") as file:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -31,195 +39,439 @@ def download_file(url: str, destination: Path) -> None:
                     file.write(chunk)
 
 
-def content_type_for(path: Path) -> str:
-    return "application/zip" if path.name.lower().endswith(".zip") else "application/octet-stream"
+def content_type_for(file_path: Path) -> str:
+    lower = file_path.name.lower()
+    if lower.endswith(".zip"):
+        return "application/zip"
+    if lower.endswith(".tar.gz") or lower.endswith(".tgz"):
+        return "application/gzip"
+    return "application/octet-stream"
 
 
-def upload_file_put(url: str, path: Path) -> None:
-    with path.open("rb") as file:
-        response = requests.put(url, data=file, headers={"Content-Type": content_type_for(path)}, timeout=300)
+def upload_file_put(url: str, file_path: Path) -> None:
+    headers = {"Content-Type": content_type_for(file_path)}
+    with file_path.open("rb") as file:
+        response = requests.put(url, data=file, headers=headers, timeout=300)
     response.raise_for_status()
 
 
-def infer_filename(url: str, fallback: str) -> str:
-    return Path(urlparse(url).path).name or fallback
+def patch_genre_routing() -> None:
+    global _GENRE_PATCHED
+    if _GENRE_PATCHED:
+        return
+
+    import master_pack
+
+    original_optional = master_pack.optional_stem_decision
+
+    def tuned_optional_stem_decision(label: str, source: Path):
+        decision = original_optional(label, source)
+        if label == "Guitar" and decision.include and decision.score < 0.68:
+            return master_pack.StemDecision(decision.label, decision.source, False, "low-confidence guitar/sample bleed", decision.score, decision.active_ratio, decision.mean_db, decision.max_db)
+        if label == "Piano / Keys" and decision.include and decision.score < 0.60:
+            return master_pack.StemDecision(decision.label, decision.source, False, "low-confidence keys/bleed", decision.score, decision.active_ratio, decision.mean_db, decision.max_db)
+        return decision
+
+    def tuned_detect_genre_from_audio(decisions: list, core_stats: dict, original_stats: dict) -> tuple[str, str]:
+        included = {d.label for d in decisions if d.include}
+        optional_scores = {d.label: d.score for d in decisions}
+        vocals = master_pack.score_of(core_stats, "Vocals")
+        drums = master_pack.score_of(core_stats, "Drums")
+        bass = master_pack.score_of(core_stats, "Bass")
+        guitar = optional_scores.get("Guitar", 0.0)
+        piano = optional_scores.get("Piano / Keys", 0.0)
+        synth_other = optional_scores.get("Synths / Strings / Other", 0.0)
+        original_active = float(original_stats.get("active_ratio", 0.0))
+        strong_rhythm = drums >= 0.44 and bass >= 0.30
+        strong_vocal = vocals >= 0.45
+        strong_guitar = "Guitar" in included and guitar >= 0.42
+        dominant_guitar = strong_guitar and guitar > max(synth_other + 0.18, 0.66)
+        strong_piano = "Piano / Keys" in included and piano >= 0.42
+        strong_synth = "Synths / Strings / Other" in included and synth_other >= 0.38
+
+        if strong_rhythm and dominant_guitar:
+            return "rock_band", "strong drums with dominant confident guitar activity"
+
+        dance_like = strong_rhythm and (strong_synth or not strong_guitar or bass >= 0.42)
+        if dance_like:
+            details = ["strong drums/bass"]
+            if strong_synth:
+                details.append("active synth/other")
+            if strong_guitar and not dominant_guitar:
+                details.append("guitar appears secondary/sample-like")
+            return "electronic_dance", ", ".join(details)
+        if strong_piano and strong_vocal and drums < 0.42:
+            return "piano_vocal_or_pop_ballad", "confident piano/keys with strong vocal and lighter drums"
+        if strong_vocal and drums >= 0.35 and bass >= 0.25 and not dominant_guitar:
+            return "vocal_pop", "strong vocal with moderate rhythm section and no dominant guitar"
+        if strong_vocal and original_active > 0.35 and drums < 0.30 and bass < 0.30:
+            return "acoustic_or_sparse", "strong vocal with low drum/bass activity"
+        if strong_rhythm and not strong_vocal:
+            return "instrumental_or_dance", "strong drums/bass with weaker vocal presence"
+        return "mixed_or_unknown", "audio features did not strongly match a known route"
+
+    master_pack.optional_stem_decision = tuned_optional_stem_decision
+    master_pack.detect_genre_from_audio = tuned_detect_genre_from_audio
+    _GENRE_PATCHED = True
+    print("LiteLABS genre routing patch applied", flush=True)
 
 
-def run_discovery_command(cmd: list[str], timeout: int = 90, output_limit: int = 12000) -> dict:
+def analyse_source_features(path: Path) -> dict:
     try:
-        completed = subprocess.run(cmd, check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
-        output = completed.stdout or ""
-        if output_limit > 0 and len(output) > output_limit:
-            output = output[-output_limit:]
-        return {"command": cmd, "returncode": completed.returncode, "ok": completed.returncode == 0, "output": output}
+        import librosa
+        import numpy as np
+        y, sr = librosa.load(path, sr=22050, mono=True, duration=180)
+        if y.size < sr:
+            return {}
+        tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
+        tempo_value = float(np.asarray(tempo).reshape(-1)[0]) if np.asarray(tempo).size else 0.0
+        harmonic, percussive = librosa.effects.hpss(y)
+        harmonic_rms = float(np.mean(librosa.feature.rms(y=harmonic)))
+        percussive_rms = float(np.mean(librosa.feature.rms(y=percussive)))
+        percussive_ratio = percussive_rms / (harmonic_rms + percussive_rms + 1e-9)
+        spectrum = np.abs(librosa.stft(y, n_fft=2048))
+        freqs = librosa.fft_frequencies(sr=sr, n_fft=2048)
+        total = float(spectrum.sum()) + 1e-9
+        bass_mask = (freqs >= 55) & (freqs < 250)
+        return {"tempo": round(tempo_value, 2), "beat_count": int(len(beats)), "percussive_ratio": round(float(percussive_ratio), 3), "bass_ratio": round(float(spectrum[bass_mask].sum() / total), 3)}
     except Exception as exc:
-        return {"command": cmd, "ok": False, "error": str(exc), "error_type": exc.__class__.__name__}
+        print(f"LiteLABS source feature analysis skipped: {exc}", flush=True)
+        return {}
 
 
-def build_audio_separator_discovery(payload: dict | None = None) -> dict:
-    payload = payload or {}
+def source_genre_override(features: dict) -> tuple[str | None, str | None]:
+    tempo = float(features.get("tempo", 0.0) or 0.0)
+    percussive = float(features.get("percussive_ratio", 0.0) or 0.0)
+    bass = float(features.get("bass_ratio", 0.0) or 0.0)
+    dance_tempo = 118.0 <= tempo <= 136.0
+    if (dance_tempo and percussive >= 0.48 and bass >= 0.13) or (percussive >= 0.62 and bass >= 0.15):
+        reason = "source audio has dance-like rhythm profile"
+        if tempo:
+            reason += f" ({tempo:.0f} BPM, percussive {percussive:.2f})"
+        return "electronic_dance", reason
+    if percussive < 0.28 and bass < 0.13:
+        return None, "sparse source profile"
+    return None, None
+
+
+def rebuild_archive(root: Path, archive_path: Path) -> None:
+    if archive_path.exists():
+        archive_path.unlink()
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as zip_file:
+        for path in sorted(root.rglob("*")):
+            if path.is_file():
+                zip_file.write(path, arcname=str(path.relative_to(root)))
+
+
+def read_detected_genre(readme: Path | None) -> str:
+    if not readme or not readme.exists():
+        return ""
+    match = re.search(r"Detected genre:\s*(.+)", readme.read_text(encoding="utf-8", errors="replace"))
+    return match.group(1).strip() if match else ""
+
+
+def run_audio_separator(input_file: Path, output_dir: Path, model_filename: str, output_format: str) -> list[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    before = {p.resolve() for p in output_dir.rglob("*") if p.is_file()}
     model_dir = Path(os.getenv("LITELABS_AUDIO_SEPARATOR_MODEL_DIR", "/models/audio_separator"))
     model_dir.mkdir(parents=True, exist_ok=True)
-    list_filter = str(payload.get("list_filter") or payload.get("stem") or "").strip().lower()
-    list_limit = max(1, min(250, int(payload.get("list_limit") or 100)))
-    list_format = str(payload.get("list_format") or "pretty").strip().lower()
-    if list_format not in {"pretty", "json"}:
-        list_format = "pretty"
-    command = ["audio-separator", "--list_models", "--list_limit", str(list_limit), "--list_format", list_format]
-    if list_filter:
-        command.extend(["--list_filter", list_filter])
-    commands = []
-    if bool(payload.get("include_help", False)):
-        commands.append(run_discovery_command(["audio-separator", "--help"], output_limit=20000))
-    commands.append(run_discovery_command(command, output_limit=100000))
-    files = sorted(str(path.relative_to(model_dir)) for path in model_dir.rglob("*") if path.is_file())[:250]
-    return {"ok": True, "mode": "audio_separator_discovery", "list_filter": list_filter or None, "list_limit": list_limit, "list_format": list_format, "env": {"LITELABS_AUDIO_SEPARATOR_MODEL_DIR": str(model_dir), "STEMFORGE_MODEL_DIR": os.getenv("STEMFORGE_MODEL_DIR", "")}, "model_dir_files": files, "commands": commands}
+    cmd = ["audio-separator", str(input_file), "--model_filename", model_filename, "--model_file_dir", str(model_dir), "--output_dir", str(output_dir), "--output_format", output_format.upper()]
+    print("LiteLABS extra vocals RUN:", " ".join(cmd), flush=True)
+    completed = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+    print(completed.stdout or "", flush=True)
+    if completed.returncode != 0:
+        raise RuntimeError(f"audio-separator failed for {model_filename}")
+    after = [p for p in output_dir.rglob("*") if p.is_file() and p.resolve() not in before]
+    return sorted(after, key=lambda p: p.stat().st_size, reverse=True)
 
 
-def load_ground_truth_builder():
+def classify_extra_vocal_outputs(files: list[Path]) -> dict[str, Path]:
+    classified: dict[str, Path] = {}
+    for file in files:
+        lower = file.name.lower()
+        if any(token in lower for token in ["backing", "backing_only", "back_vocal", "bv_vocal", "_bv", "-bv"]):
+            classified.setdefault("backing", file)
+        elif any(token in lower for token in ["lead", "lead_only", "main_vocal", "main vocals"]):
+            classified.setdefault("lead", file)
+        elif any(token in lower for token in ["dry", "dereverb", "deverb", "no_reverb", "noreverb", "no-reverb"]):
+            classified.setdefault("dry", file)
+        elif "reverb" in lower or "echo" in lower:
+            continue
+        elif "vocals" in lower or "vocal" in lower:
+            classified.setdefault("dry", file)
+    return classified
+
+
+def is_useful_extra_vocal(path: Path, min_score: float, min_active: float) -> tuple[bool, str]:
+    import master_pack
+    stats = master_pack.analyse_audio(path)
+    score = float(stats.get("score", 0.0))
+    active = float(stats.get("active_ratio", 0.0))
+    max_db = float(stats.get("max_db", -99.0))
+    if max_db <= -45.0:
+        return False, "too quiet / not confidently detected"
+    if active < min_active:
+        return False, "low activity"
+    if score < min_score:
+        return False, "low confidence / likely artefacts"
+    return True, "useful"
+
+
+def next_stem_index(files: list[Path]) -> int:
+    indexes: list[int] = []
+    for file in files:
+        match = re.match(r"^(\d+)_", file.name)
+        if match:
+            indexes.append(int(match.group(1)))
+    return (max(indexes) + 1) if indexes else 1
+
+
+def append_readme_notes(readme: Path | None, included_notes: list[str], omitted_notes: list[str]) -> None:
+    if not readme or not readme.exists():
+        return
+    text = readme.read_text(encoding="utf-8", errors="replace")
+    if included_notes:
+        insert = "\n" + "\n".join(included_notes)
+        if "\n\nOmitted stems:" in text:
+            text = text.replace("\n\nOmitted stems:", insert + "\n\nOmitted stems:", 1)
+        else:
+            text = text.replace("\n\nGenerated with care", insert + "\n\nGenerated with care", 1)
+    if omitted_notes:
+        if "Omitted stems:" in text:
+            text = text.replace("\n\nGenerated with care", "\n" + "\n".join(omitted_notes) + "\n\nGenerated with care", 1)
+        else:
+            text = text.replace("\n\nGenerated with care", "\n\nOmitted stems:\n\n" + "\n".join(omitted_notes) + "\n\nGenerated with care", 1)
+    readme.write_text(text, encoding="utf-8")
+
+
+def add_extra_vocals(root: Path, files: list[Path], readme: Path | None, output_format: str) -> list[str]:
+    import master_pack
+    if not is_enabled(os.getenv("LITELABS_EXTRA_VOCALS")):
+        return []
+    changes: list[str] = []
+    included_notes: list[str] = []
+    omitted_notes: list[str] = []
+    master_dir = readme.parent if readme else next((p.parent for p in files if re.match(r"^\d+_", p.name)), root)
+    vocal_file = next((p for p in files if "_vocals." in p.name.lower() and "lead" not in p.name.lower() and "backing" not in p.name.lower()), None)
+    if not vocal_file or not vocal_file.exists():
+        return []
+    model_backing = os.getenv("LITELABS_BACKING_MODEL", "UVR-BVE-4B_SN-44100-1.pth")
+    model_dry = os.getenv("LITELABS_DRY_MODEL", "deverb_bs_roformer_8_256dim_8depth.ckpt")
+    temp_root = root / "__litelabs_extra_vocals"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    output_index = next_stem_index([p for p in master_dir.iterdir() if p.is_file()])
     try:
-        from ground_truth_benchmark import build_ground_truth_benchmark
-        return build_ground_truth_benchmark
-    except ModuleNotFoundError:
-        fallback_url = "https://raw.githubusercontent.com/brrradley/litelabs-worker/research/ground_truth_benchmark.py"
-        response = requests.get(fallback_url, timeout=60)
-        response.raise_for_status()
-        namespace = {"__name__": "ground_truth_benchmark_runtime", "__file__": fallback_url}
-        exec(compile(response.text, fallback_url, "exec"), namespace)
-        return namespace["build_ground_truth_benchmark"]
+        backing_outputs = run_audio_separator(vocal_file, temp_root / "backing", model_backing, output_format)
+        classified = classify_extra_vocal_outputs(backing_outputs)
+        lead_candidate = classified.get("lead")
+        backing_candidate = classified.get("backing")
+        if lead_candidate and lead_candidate.exists():
+            useful, reason = is_useful_extra_vocal(lead_candidate, 0.28, 0.08)
+            if useful:
+                dest = master_dir / f"{output_index:02d}_{vocal_file.stem.replace('_vocals', '')}_lead_vocals.{output_format}"
+                master_pack.copy_or_convert_audio(lead_candidate, dest, output_format)
+                included_notes.append(f"{output_index:02d} Lead Vocals")
+                changes.append("added Lead Vocals")
+                output_index += 1
+            else:
+                omitted_notes.append(f"Lead Vocals — {reason}")
+        if backing_candidate and backing_candidate.exists():
+            useful, reason = is_useful_extra_vocal(backing_candidate, 0.24, 0.04)
+            if useful:
+                dest = master_dir / f"{output_index:02d}_{vocal_file.stem.replace('_vocals', '')}_backing_vocals.{output_format}"
+                master_pack.copy_or_convert_audio(backing_candidate, dest, output_format)
+                included_notes.append(f"{output_index:02d} Backing Vocals")
+                changes.append("added Backing Vocals")
+                output_index += 1
+            else:
+                omitted_notes.append(f"Backing Vocals — {reason}")
+        else:
+            omitted_notes.append("Backing Vocals — model did not produce a confident backing vocal file")
+        dry_outputs = run_audio_separator(vocal_file, temp_root / "dry", model_dry, output_format)
+        dry_classified = classify_extra_vocal_outputs(dry_outputs)
+        dry_candidate = dry_classified.get("dry")
+        if dry_candidate and dry_candidate.exists():
+            useful, reason = is_useful_extra_vocal(dry_candidate, 0.30, 0.08)
+            if useful:
+                dest = master_dir / f"{output_index:02d}_{vocal_file.stem.replace('_vocals', '')}_dry_vocals.{output_format}"
+                master_pack.copy_or_convert_audio(dry_candidate, dest, output_format)
+                included_notes.append(f"{output_index:02d} Dry Vocals")
+                changes.append("added Dry Vocals")
+            else:
+                omitted_notes.append(f"Dry Vocals — {reason}")
+        else:
+            omitted_notes.append("Dry Vocals — model did not produce a confident dry vocal file")
+    except Exception as exc:
+        omitted_notes.append(f"Extra vocal stems — skipped ({exc})")
+        print(f"LiteLABS extra vocal separation skipped: {exc}", flush=True)
+    finally:
+        if temp_root.exists():
+            import shutil
+            shutil.rmtree(temp_root, ignore_errors=True)
+    append_readme_notes(readme, included_notes, omitted_notes)
+    return changes
+
+
+def post_process_archive(archive_path: Path, source_features: dict, output_format: str = "flac") -> list[str]:
+    import master_pack
+    changes: list[str] = []
+    genre_override, genre_reason = source_genre_override(source_features)
+    with tempfile.TemporaryDirectory(prefix="litelabs_post_") as post_dir:
+        root = Path(post_dir)
+        with zipfile.ZipFile(archive_path, "r") as zip_file:
+            zip_file.extractall(root)
+        files = [p for p in root.rglob("*") if p.is_file()]
+        readme = next((p for p in files if p.name == "README.txt"), None)
+        current_genre = read_detected_genre(readme)
+        guitar_file = next((p for p in files if "_guitar." in p.name.lower()), None)
+        synth_file = next((p for p in files if "_synth_strings_other." in p.name.lower()), None)
+        drums_file = next((p for p in files if "_drums." in p.name.lower()), None)
+        bass_file = next((p for p in files if "_bass." in p.name.lower()), None)
+        guitar_stats = master_pack.analyse_audio(guitar_file) if guitar_file else {}
+        synth_stats = master_pack.analyse_audio(synth_file) if synth_file else {}
+        drums_stats = master_pack.analyse_audio(drums_file) if drums_file else {}
+        bass_stats = master_pack.analyse_audio(bass_file) if bass_file else {}
+        guitar_score = float(guitar_stats.get("score", 0.0))
+        synth_score = float(synth_stats.get("score", 0.0))
+        drums_score = float(drums_stats.get("score", 0.0))
+        bass_score = float(bass_stats.get("score", 0.0))
+        dominant_rock_guitar = guitar_score >= max(synth_score + 0.18, 0.66) and drums_score >= 0.44 and bass_score >= 0.30
+        protect_rock = current_genre == "rock_band" and dominant_rock_guitar
+        omitted_notes: list[str] = []
+        sparse_hint = genre_reason == "sparse source profile"
+        for stem_file in list(files):
+            lower = stem_file.name.lower()
+            label = None
+            threshold = 0.0
+            if "_drums." in lower:
+                label, threshold = "Drums", 0.30 if sparse_hint else 0.22
+            elif "_bass." in lower:
+                label, threshold = "Bass", 0.28 if sparse_hint else 0.20
+            elif "_guitar." in lower:
+                label, threshold = "Guitar", 0.32
+            elif "_piano_keys." in lower:
+                label, threshold = "Piano / Keys", 0.30
+            if not label:
+                continue
+            stats = master_pack.analyse_audio(stem_file)
+            score = float(stats.get("score", 0.0))
+            active = float(stats.get("active_ratio", 0.0))
+            if score < threshold or active < 0.06:
+                stem_file.unlink(missing_ok=True)
+                omitted_notes.append(f"{label} — low activity / not useful enough for this pack")
+                changes.append(f"removed {label}")
+        if readme and readme.exists():
+            text = readme.read_text(encoding="utf-8", errors="replace")
+            if dominant_rock_guitar:
+                text = re.sub(r"Detected genre: .+", "Detected genre: rock_band", text)
+                text = re.sub(r"Genre reason: .+", "Genre reason: dominant guitar, drums and bass indicate rock band", text)
+                changes.append("genre set to rock_band")
+            elif genre_override and not protect_rock:
+                text = re.sub(r"Detected genre: .+", f"Detected genre: {genre_override}", text)
+                text = re.sub(r"Genre reason: .+", f"Genre reason: {genre_reason}", text)
+                changes.append(f"genre set to {genre_override}")
+            elif protect_rock:
+                text = re.sub(r"Genre reason: .+", "Genre reason: dominant guitar protected from dance override", text)
+                changes.append("rock genre protected")
+            if omitted_notes:
+                if "Omitted stems:" in text:
+                    text = text.replace("\n\nGenerated with care", "\n" + "\n".join(omitted_notes) + "\n\nGenerated with care")
+                else:
+                    text = text.replace("\n\nGenerated with care", "\n\nOmitted stems:\n\n" + "\n".join(omitted_notes) + "\n\nGenerated with care")
+            readme.write_text(text, encoding="utf-8")
+            changes.append("README updated")
+        files = [p for p in root.rglob("*") if p.is_file()]
+        extra_changes = add_extra_vocals(root, files, readme, output_format)
+        changes.extend(extra_changes)
+        if changes:
+            rebuild_archive(root, archive_path)
+    return changes
 
 
 def handler(job: dict) -> dict:
-    print("LiteLABS research job received", flush=True)
+    print("LiteLABS received job", flush=True)
     payload = job.get("input") or {}
-    modes = ["system_info", "master_pack", "model_bakeoff", "benchmark_suite", "ground_truth_benchmark", "model_ground_truth_bakeoff", "cascade_ground_truth_bakeoff", "multi_case_ground_truth_bakeoff", "adaptive_research_campaign", "multitrack_ground_truth_campaign", "stem_pack_inventory", "stem_pack_compare", "studio_mix_compatibility", "vocal_residual_test", "audio_separator_discovery"]
 
     if payload.get("healthcheck") is True:
-        status = {}
-        checks = {
-            "ground_truth_benchmark": ("ground_truth_benchmark", "build_ground_truth_benchmark"),
-            "model_ground_truth_bakeoff": ("model_ground_truth_bakeoff", "build_model_ground_truth_bakeoff"),
-            "cascade_ground_truth_bakeoff": ("cascade_ground_truth_bakeoff", "build_cascade_ground_truth_bakeoff"),
-            "multi_case_ground_truth_bakeoff": ("multi_case_ground_truth_bakeoff", "build_multi_case_ground_truth_bakeoff"),
-            "adaptive_research_campaign": ("adaptive_research_campaign", "build_adaptive_research_campaign"),
-            "multitrack_ground_truth_campaign": ("multitrack_ground_truth_campaign", "build_multitrack_ground_truth_campaign"),
-            "stem_pack_inventory": ("stem_pack_inventory", "build_stem_pack_inventory"),
-            "stem_pack_compare": ("stem_pack_compare", "build_stem_pack_compare"),
-            "studio_mix_compatibility": ("studio_mix_compatibility", "build_studio_mix_compatibility"),
-        }
-        for key, (module_name, attribute) in checks.items():
-            try:
-                module = __import__(module_name, fromlist=[attribute])
-                getattr(module, attribute)
-                status[key] = True
-            except Exception as exc:
-                status[key] = False
-                status[f"{key}_error"] = str(exc)
-        return {"ok": True, "status": "ready", "service": "litelabs-research-worker", "modes": modes, "module_status": status}
+        return {"ok": True, "status": "ready", "service": "litelabs-worker", "default_mode": "routed_extraction_v1"}
 
-    mode = payload.get("mode") or "master_pack"
+    audio_url = payload.get("audio_url")
+    if not audio_url:
+        return {"ok": False, "error": "Missing required input.audio_url"}
+
+    result_put_url = payload.get("result_put_url")
+    result_public_url = payload.get("result_public_url")
     progress_url = payload.get("progress_url")
     progress_token = payload.get("progress_token")
     progress_job_id = payload.get("progress_job_id")
-    result_put_url = payload.get("result_put_url")
-    result_public_url = payload.get("result_public_url")
 
     def progress(message: str, percent: int) -> None:
         post_progress(progress_url, progress_token, progress_job_id, message, percent)
 
-    try:
-        if mode == "system_info":
-            from research_tools import build_system_info
-            return build_system_info()
-        if mode == "audio_separator_discovery":
-            return build_audio_separator_discovery(payload)
-        if mode == "benchmark_suite":
-            from benchmark_suite import build_benchmark_suite
-            return build_benchmark_suite(payload, progress=progress)
-        if mode == "ground_truth_benchmark":
-            return load_ground_truth_builder()(payload, progress=progress)
-        if mode == "model_ground_truth_bakeoff":
-            from model_ground_truth_bakeoff import build_model_ground_truth_bakeoff
-            return build_model_ground_truth_bakeoff(payload, progress=progress)
-        if mode == "cascade_ground_truth_bakeoff":
-            from cascade_ground_truth_bakeoff import build_cascade_ground_truth_bakeoff
-            return build_cascade_ground_truth_bakeoff(payload, progress=progress)
-        if mode == "multi_case_ground_truth_bakeoff":
-            from multi_case_ground_truth_bakeoff import build_multi_case_ground_truth_bakeoff
-            return build_multi_case_ground_truth_bakeoff(payload, progress=progress)
-        if mode == "adaptive_research_campaign":
-            from adaptive_research_campaign import build_adaptive_research_campaign
-            return build_adaptive_research_campaign(payload, progress=progress)
-        if mode == "multitrack_ground_truth_campaign":
-            from multitrack_ground_truth_campaign import build_multitrack_ground_truth_campaign
-            return build_multitrack_ground_truth_campaign(payload, progress=progress)
-        if mode == "stem_pack_inventory":
-            from stem_pack_inventory import build_stem_pack_inventory
-            return build_stem_pack_inventory(payload, progress=progress)
-        if mode == "stem_pack_compare":
-            from stem_pack_compare import build_stem_pack_compare
-            return build_stem_pack_compare(payload, progress=progress)
-        if mode == "studio_mix_compatibility":
-            from studio_mix_compatibility import build_studio_mix_compatibility
-            return build_studio_mix_compatibility(payload, progress=progress)
+    mode = str(payload.get("mode") or "routed_extraction_v1").strip()
+    if mode == "routed_extraction_v1":
+        try:
+            from routed_extraction_v1 import build_routed_extraction_v1
+            result = build_routed_extraction_v1(payload, progress=progress)
+            if result.get("ok"):
+                result["production"] = True
+                result.pop("research_only", None)
+                result.pop("warning", None)
+            return result
+        except Exception as exc:
+            post_progress(progress_url, progress_token, progress_job_id, f"Worker error: {exc}", 100)
+            return {"ok": False, "mode": mode, "error": str(exc), "error_type": exc.__class__.__name__}
 
-        with tempfile.TemporaryDirectory(prefix="litelabs_research_") as temp_dir:
+    # Explicit legacy fallback for rollback/testing.
+    patch_genre_routing()
+    from master_pack import build_master_pack
+
+    filename = payload.get("filename")
+    if not filename:
+        parsed_name = Path(urlparse(audio_url).path).name
+        filename = parsed_name or "track.mp3"
+
+    output_format = str(payload.get("output_format") or "flac").lower().strip()
+    if output_format not in {"mp3", "flac"}:
+        output_format = "flac"
+
+    model_dir = Path(payload.get("model_dir") or os.getenv("STEMFORGE_MODEL_DIR", "/models/bs_roformer_sw"))
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="litelabs_") as temp_dir:
             temp_root = Path(temp_dir)
-            output_root = temp_root / "output"
-            output_root.mkdir(parents=True, exist_ok=True)
-            if mode == "model_bakeoff":
-                audio_url = payload.get("audio_url")
-                if not audio_url:
-                    return {"ok": False, "error": "Missing required input.audio_url"}
-                filename = payload.get("filename") or infer_filename(audio_url, "track.mp3")
-                input_path = temp_root / filename
-                download_file(audio_url, input_path)
-                from research_tools import build_model_bakeoff
-                result = build_model_bakeoff(input_path=input_path, output_root=output_root, filename=filename, models=payload.get("models"), output_format=str(payload.get("output_format") or "flac").lower().strip(), progress=progress)
-                archive_path = Path(result["archive_path"])
-                uploaded = False
-                if result_put_url:
-                    upload_file_put(result_put_url, archive_path)
-                    uploaded = True
-                return {"ok": True, "mode": mode, "track": result["track"], "archive_size_bytes": archive_path.stat().st_size, "uploaded": uploaded, "result_url": result_public_url, "runs": result["runs"], "files": result["files"]}
-            if mode == "vocal_residual_test":
-                vocals_url = payload.get("vocals_url") or payload.get("audio_url")
-                lead_url = payload.get("lead_vocals_url") or payload.get("lead_url")
-                if not vocals_url or not lead_url:
-                    return {"ok": False, "error": "Missing vocal URLs"}
-                filename = payload.get("filename") or infer_filename(vocals_url, "vocals.flac")
-                vocals_path = temp_root / filename
-                lead_path = temp_root / (payload.get("lead_filename") or infer_filename(lead_url, "lead-vocals.flac"))
-                download_file(vocals_url, vocals_path)
-                download_file(lead_url, lead_path)
-                from research_tools import build_vocal_residual_test
-                result = build_vocal_residual_test(vocals_path=vocals_path, lead_path=lead_path, output_root=output_root, filename=filename)
-                archive_path = Path(result["archive_path"])
-                uploaded = False
-                if result_put_url:
-                    upload_file_put(result_put_url, archive_path)
-                    uploaded = True
-                return {"ok": True, "mode": mode, "track": result["track"], "archive_size_bytes": archive_path.stat().st_size, "uploaded": uploaded, "result_url": result_public_url, "files": result["files"]}
-            if mode != "master_pack":
-                return {"ok": False, "error": f"Unknown research mode: {mode}"}
-            audio_url = payload.get("audio_url")
-            if not audio_url:
-                return {"ok": False, "error": "Missing required input.audio_url"}
-            filename = payload.get("filename") or infer_filename(audio_url, "track.mp3")
             input_path = temp_root / filename
+            work_root = temp_root / "work"
+            output_root = temp_root / "output"
+
+            progress("Worker starting", 12)
+            progress("Downloading audio", 15)
             download_file(audio_url, input_path)
-            from master_pack import build_master_pack
-            result = build_master_pack(input_audio=input_path, work_root=temp_root / "work", model_dir=Path(payload.get("model_dir") or os.getenv("STEMFORGE_MODEL_DIR", "/models/bs_roformer_sw")), output_root=output_root, progress=progress)
+            progress("Audio downloaded", 17)
+            source_features = analyse_source_features(input_path)
+            print(f"LiteLABS source features: {source_features}", flush=True)
+
+            result = build_master_pack(input_audio=input_path, work_root=work_root, model_dir=model_dir, output_root=output_root, progress=progress, output_format=output_format)
             archive_path = Path(result["archive_path"])
+
+            progress("Validating final stem pack", 93)
+            post_changes = post_process_archive(archive_path, source_features, output_format)
+            if post_changes:
+                print(f"LiteLABS post-process changes: {post_changes}", flush=True)
+
+            archive_size = archive_path.stat().st_size
             uploaded = False
             if result_put_url:
+                progress("Uploading ZIP back to LiteRECORDS", 94)
                 upload_file_put(result_put_url, archive_path)
                 uploaded = True
-            return {"ok": True, "mode": mode, "track": result["track"], "archive_size_bytes": archive_path.stat().st_size, "uploaded": uploaded, "result_url": result_public_url, "stems": result["stems"]}
+                progress("Finalising download", 98)
+
+            return {"ok": True, "mode": "master_pack", "track": result["track"], "output_format": result.get("output_format", output_format), "archive_size_bytes": archive_size, "uploaded": uploaded, "result_url": result_public_url, "stems": result["stems"], "post_process_changes": post_changes, "source_features": source_features}
     except Exception as exc:
         post_progress(progress_url, progress_token, progress_job_id, f"Worker error: {exc}", 100)
-        return {"ok": False, "mode": mode, "error": str(exc), "error_type": exc.__class__.__name__}
+        return {"ok": False, "mode": "master_pack", "error": str(exc), "error_type": exc.__class__.__name__}
 
 
-print("LiteLABS research handler ready", flush=True)
+print("LiteLABS handler ready", flush=True)
 runpod.serverless.start({"handler": handler})
