@@ -149,8 +149,8 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
             "benchmark_id": "vocal_benchmark_v1",
             "files": vocal_files,
             "parent_recipe": "BS-RoFormer-SW vocals",
-            "lead_recipe": "25% SW + 75% MelBand Becruily vocal parent -> Becruily karaoke Vocals",
-            "backing_recipe": "SW vocals - fast SW->Becruily karaoke Vocals",
+            "lead_recipe": "25% SW + 75% MelBand Becruily vocal parent -> Becruily karaoke secondary/Instrumental",
+            "backing_recipe": "SW vocals - fast SW->Becruily karaoke secondary/Instrumental",
             "backing_detected": bool(duplicate_analysis["backing_detected"]),
             "backing_suppressed_reason": (
                 None if duplicate_analysis["backing_detected"]
