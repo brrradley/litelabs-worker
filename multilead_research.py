@@ -55,7 +55,11 @@ def _load_model(device: torch.device):
     else:
         model.load_state_dict(checkpoint)
 
+    # Keep the research separator in float32. The pretrained checkpoint can
+    # contain half-precision buffers and its scatter/index operations reject a
+    # Float source into a Half destination under autocast.
     model.to(device)
+    model.float()
     model.eval()
     return model, args
 
@@ -63,8 +67,7 @@ def _load_model(device: torch.device):
 def _infer_chunk(model, chunk: np.ndarray, device: torch.device) -> np.ndarray:
     tensor = torch.from_numpy(np.asarray(chunk, dtype=np.float32)).view(1, 1, -1).to(device)
     with torch.inference_mode():
-        with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=device.type == "cuda"):
-            out = model.separate(tensor)
+        out = model.separate(tensor.float())
     arr = out.detach().float().cpu().numpy()
     if arr.ndim != 3 or arr.shape[1] < 2:
         raise RuntimeError(f"Unexpected MedleyVox output shape: {arr.shape}")
