@@ -118,7 +118,18 @@ text = text.replace('# public_readme_model_redaction_v1\n', '# public_readme_mod
 path.write_text(text, encoding='utf-8')
 
 check = path.read_text(encoding='utf-8')
-compile(check, str(path), 'exec')
+try:
+    compile(check, str(path), 'exec')
+except (IndentationError, SyntaxError) as exc:
+    lines = check.splitlines()
+    lineno = int(getattr(exc, 'lineno', 0) or 0)
+    lo = max(1, lineno - 12)
+    hi = min(len(lines), lineno + 12)
+    print("----- generated experimental_children_v1.py context -----", flush=True)
+    for number in range(lo, hi + 1):
+        print(f"{number:04d}: {lines[number - 1]!r}", flush=True)
+    print("----- end generated source context -----", flush=True)
+    raise
 assert 'public_readme_inventory_final_v1' in check
 assert 'LITELABS G400 GENRE CANDIDATES' in check
 assert 'ESSENTIA GENRE CANDIDATES' not in check
