@@ -106,16 +106,21 @@ packaging = '''        # experimental_pack_only_v2
                 peak_dbfs = _db(peak)
                 activity_floor = max(10.0 ** (-55.0 / 20.0), peak * 0.03)
                 active_ratio = float(np.mean(np.abs(mono) >= activity_floor))
+                duration_seconds = float(len(mono)) / max(float(_sr), 1.0)
+                bytes_per_second = float(audio_path.stat().st_size) / max(duration_seconds, 1.0)
                 dead = bool(
                     peak_dbfs <= -42.0
                     or (rms_dbfs <= -52.0 and active_ratio < 0.01)
                     or active_ratio < 0.001
+                    or (duration_seconds >= 60.0 and bytes_per_second < 3000.0)
                 )
                 return {
                     "dead": dead,
                     "rms_dbfs": round(rms_dbfs, 3),
                     "peak_dbfs": round(peak_dbfs, 3),
                     "active_ratio": round(active_ratio, 6),
+                    "duration_seconds": round(duration_seconds, 3),
+                    "bytes_per_second": round(bytes_per_second, 3),
                 }
             except Exception as exc:
                 return {
