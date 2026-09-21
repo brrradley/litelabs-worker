@@ -57,18 +57,19 @@ def run_essentia_research(instrument_audio: Path, genre_audio: Path, progress=No
         graphFilename=str(EMBEDDING),
         output="PartitionedCall:1",
     )
-    # The shipped frozen graphs expose SavedModel-style node names in this
-    # Essentia/TensorFlow build. Configure them explicitly rather than relying
-    # on TensorflowPredict2D's older model/Placeholder + model/Sigmoid defaults.
+
+    # These frozen classifier heads expose the legacy graph node names below.
+    # Keep them explicit so TensorflowPredict2D does not guess SavedModel-style
+    # serving names that are not present in the packaged .pb graphs.
     instrument_model = TensorflowPredict2D(
         graphFilename=str(INSTRUMENT_HEAD),
-        input="serving_default_model_Placeholder",
-        output="PartitionedCall:0",
+        input="model/Placeholder",
+        output="model/Sigmoid",
     )
     genre_model = TensorflowPredict2D(
         graphFilename=str(GENRE_HEAD),
-        input="serving_default_model_Placeholder",
-        output="PartitionedCall:0",
+        input="model/Placeholder",
+        output="model/Sigmoid",
     )
 
     if progress:
