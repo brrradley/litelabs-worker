@@ -3,7 +3,7 @@ name: Build Docker image
 on:
   push:
     branches:
-      - serverless-integration
+      - main
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: litelabs-serverless-integration-docker
+  group: litelabs-main-docker
   cancel-in-progress: true
 
 env:
@@ -47,5 +47,5 @@ jobs:
           build-args: |
             LITELABS_BUILD_SHA=${{ github.sha }}
           tags: |
-            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:serverless-integration
-            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:serverless-integration-${{ github.sha }}
+            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:latest
+            ghcr.io/${{ env.OWNER_LC }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
