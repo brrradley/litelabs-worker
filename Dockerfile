@@ -247,7 +247,9 @@ assert 'best_stems_share_single_parent_pair' in source
 assert 'suppressed_as_gain_scaled_duplicate' in source
 assert 'gain_scaled_duplicate_of_lead' in source
 assert 'public_role_correction' in source
-assert '"backing_detected": bool(duplicate_analysis["backing_detected"])' in source
+assert 'acoustic_role_validation_v2' in source
+assert '_vx_role_evidence' in source
+assert '"backing_detected": bool(backing_exported)' in source
 
 # HH and cymbals remain one DrumSep inference but are merged before encoding.
 assert 'in_memory_hh_plus_cymbals_before_final_encode' in source
@@ -290,9 +292,12 @@ assert 'torch.autocast' not in multilead_source
 assert 'LITELABS G400 GENRE CANDIDATES' in source
 assert 'ESSENTIA GENRE CANDIDATES' not in source
 assert 'public_readme_inventory_final_v1' in source
-assert 'experimental_pack_only_v2' in source
-assert 'curated_experimental_only_v2' in source
-assert 'pack_folder_name' in source
+assert 'experimental_pack_only_v3' in source
+assert 'curated_experimental_only_v3' in source
+assert '"archive_layout": "flat"' in source
+assert 'bundle.write(p, arcname=p.name)' in source
+assert 'public_detected_by_family' in source
+assert 'heuristic genre kept internal only' in source
 assert 'dead_or_near_silent' in source
 assert '"drums_5stem_kick": "kick"' in source
 assert '"wind_brass_family": "wind"' in source
