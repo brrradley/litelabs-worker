@@ -3,6 +3,14 @@ from pathlib import Path
 path = Path('/app/experimental_children_v1.py')
 text = path.read_text(encoding='utf-8')
 
+# Flatten experimental outputs into the ZIP root. Parent audio is removed below,
+# so an /experimental/ subfolder only adds friction for users.
+text = text.replace(
+    '        experimental = final / "experimental"\n',
+    '        experimental = final\n',
+    1,
+)
+
 # Research download packs are for experimental outputs only. RoFormer parent
 # stems remain available internally for routing, QA and child reconstruction,
 # but they are not duplicated into the downloadable ZIP.
@@ -82,4 +90,5 @@ assert '_parent_plus_experimental.zip' not in check
 assert '_experimental_stems.zip' in check
 assert 'Packaging Experimental Stems' in check
 assert 'root_parent_files' not in check
+assert 'experimental = final / "experimental"' not in check
 print('LiteLABS research experimental-only pack policy applied')
