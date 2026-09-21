@@ -11,7 +11,7 @@ parent_copy = '''        for stem in SW_STEMS:
 if parent_copy in text:
     text = text.replace(
         parent_copy,
-        '''        # experimental_pack_only_v2
+        '''        # experimental_pack_only_v3
         # Parent stems stay internal; do not copy them into the customer pack.
 ''',
         1,
@@ -65,13 +65,11 @@ end = text.find('        uploaded = False\n', start)
 if start < 0 or end < 0:
     raise RuntimeError('Could not locate Experimental packaging block')
 
-packaging = '''        # experimental_pack_only_v2
+packaging = '''        # experimental_pack_only_v3
         emit("Packaging Experimental Stems", 92)
         import re as _pack_re
         import shutil as _pack_shutil
 
-        # The worker key stays in the pack folder for traceability, but public
-        # audio filenames use the clean source track name.
         worker_match = _pack_re.search(r"-(?P<key>[0-9a-fA-F]{16})$", track)
         if worker_match:
             worker_key = worker_match.group("key")
@@ -85,12 +83,8 @@ packaging = '''        # experimental_pack_only_v2
             ).strip()
             public_track = track
 
-        pack_folder_name = (
-            f"{public_track}-{worker_key}-litelabs-experimental"
-            if worker_key
-            else f"{public_track}-litelabs-experimental"
-        )
-        pack_root = root / pack_folder_name
+        # Staging remains internal only. The ZIP itself is deliberately flat.
+        pack_root = root / "curated_experimental_pack"
         pack_root.mkdir(parents=True, exist_ok=True)
 
         def _pack_audio_metrics(audio_path):
@@ -98,21 +92,33 @@ packaging = '''        # experimental_pack_only_v2
                 audio, _sr = _read(audio_path)
                 arr = np.asarray(audio, dtype=np.float32)
                 if arr.size == 0:
-                    return {"dead": True, "rms_dbfs": -120.0, "peak_dbfs": -120.0, "active_ratio": 0.0}
+                    return {
+                        "dead": True,
+                        "rms_dbfs": -120.0,
+                        "peak_dbfs": -120.0,
+                        "active_ratio": 0.0,
+                    }
                 mono = np.mean(arr, axis=1) if arr.ndim > 1 else arr
                 rms = float(np.sqrt(np.mean(np.asarray(mono, dtype=np.float64) ** 2) + 1e-12))
                 peak = float(np.max(np.abs(mono)) + 1e-12)
                 rms_dbfs = _db(rms)
                 peak_dbfs = _db(peak)
-                activity_floor = max(10.0 ** (-55.0 / 20.0), peak * 0.03)
+                activity_floor = max(10.0 ** (-60.0 / 20.0), peak * 0.02)
                 active_ratio = float(np.mean(np.abs(mono) >= activity_floor))
                 duration_seconds = float(len(mono)) / max(float(_sr), 1.0)
                 bytes_per_second = float(audio_path.stat().st_size) / max(duration_seconds, 1.0)
+
+                # Be conservative: remove only stems that are clearly empty or
+                # near-empty. Quiet/sparse musical material should survive.
                 dead = bool(
-                    peak_dbfs <= -42.0
-                    or (rms_dbfs <= -52.0 and active_ratio < 0.01)
-                    or active_ratio < 0.001
-                    or (duration_seconds >= 60.0 and bytes_per_second < 3000.0)
+                    peak_dbfs <= -55.0
+                    or (rms_dbfs <= -55.0 and active_ratio < 0.005)
+                    or (
+                        duration_seconds >= 60.0
+                        and bytes_per_second < 1800.0
+                        and rms_dbfs <= -48.0
+                        and active_ratio < 0.01
+                    )
                 )
                 return {
                     "dead": dead,
@@ -145,7 +151,7 @@ packaging = '''        # experimental_pack_only_v2
                 stem_id = stem_id[len(track):].lstrip("_-")
             stem_id = stem_name_map.get(stem_id, stem_id)
 
-            # Residual complements are routing evidence, not customer stems.
+            # Complements/residuals are technical evidence, not customer stems.
             if stem_id.endswith("_residual") or "residual" in stem_id:
                 omitted_files.append({
                     "source": src.name,
@@ -170,32 +176,194 @@ packaging = '''        # experimental_pack_only_v2
             _pack_shutil.copy2(src, dest)
             exported_files.append(dest.name)
 
-        # Rewrite the public README's Included Stems block to match the curated
-        # names, while preserving detector/genre sections composed earlier.
+        # Rebuild public detector evidence at the final packaging boundary so
+        # earlier README composition cannot leave stale/empty instrumentation.
+        public_detected_by_family = {}
+        for family, members in family_map.items():
+            if family == "Vocals":
+                continue
+            found = sorted({
+                name for name in detected_instruments
+                if name in members
+            })
+            if found:
+                public_detected_by_family[family] = found
+
+        g400_items = []
+        broad_families = []
+        public_genre = "unverified"
+        public_genre_reason = "LiteLABS G400 evidence unavailable; heuristic genre kept internal only"
+        if essentia_report.get("ok"):
+            g400_items = list(essentia_report.get("genre_top10") or [])
+            broad_families = list(essentia_report.get("genre_broad_families") or [])
+            if g400_items:
+                top_genre = g400_items[0]
+                public_genre = str(top_genre.get("label") or "unverified").replace("---", " / ").replace("_", " ")
+                public_genre_reason = (
+                    "LiteLABS G400 top classification "
+                    f"(mean {float(top_genre.get('mean', 0.0)):.3f}, "
+                    f"p90 {float(top_genre.get('p90', 0.0)):.3f})"
+                )
+
         readme_source = final / "README.txt"
         if readme_source.is_file():
-            readme_text = readme_source.read_text(encoding="utf-8", errors="replace")
-            heading = "INCLUDED STEMS\\n--------------"
-            if heading in readme_text:
-                before, after = readme_text.split(heading, 1)
-                tail = after
-                split_at = tail.find("\\n\\n")
-                if split_at >= 0:
-                    tail = tail[split_at + 2:]
-                included = "\\n".join(f"- {name}" for name in sorted(exported_files))
-                readme_text = before + heading + "\\n" + included + "\\n\\n" + tail
-            else:
-                included = "\\n".join(f"- {name}" for name in sorted(exported_files))
-                readme_text += "\\n\\n" + heading + "\\n" + included + "\\n"
-            (pack_root / "README.txt").write_text(readme_text, encoding="utf-8")
+            readme_lines = readme_source.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
+        else:
+            readme_lines = [
+                "LiteLABS Stem Extraction Tools",
+                "==============================",
+                "",
+                "TRACK INFORMATION",
+                "-----------------",
+                f"Track: {payload.get('filename') or public_track}",
+                "Pack: Experimental",
+                "Output format: FLAC",
+                "",
+                "ABOUT THIS PACK",
+                "---------------",
+                "This stem pack was created using LiteLABS Stem Extraction Tools.",
+            ]
+
+        # Remove any older detector/G400 block so there is only one source of
+        # truth in the final README.
+        if "DETECTED INSTRUMENTS" in readme_lines:
+            detector_start = readme_lines.index("DETECTED INSTRUMENTS")
+            included_candidates = [
+                idx for idx, line in enumerate(readme_lines)
+                if line == "INCLUDED STEMS" and idx > detector_start
+            ]
+            detector_end = included_candidates[0] if included_candidates else len(readme_lines)
+            del readme_lines[detector_start:detector_end]
+
+        # Replace stale heuristic genre text with G400 evidence (or explicitly
+        # unverified metadata when G400 did not return evidence).
+        genre_seen = False
+        reason_seen = False
+        for idx, line in enumerate(readme_lines):
+            if line.startswith("Detected genre:"):
+                readme_lines[idx] = f"Detected genre: {public_genre}"
+                genre_seen = True
+            elif line.startswith("Genre reason:"):
+                readme_lines[idx] = f"Genre reason: {public_genre_reason}"
+                reason_seen = True
+
+        output_format_idx = next(
+            (idx for idx, line in enumerate(readme_lines) if line.startswith("Output format:")),
+            None,
+        )
+        if not genre_seen:
+            insert_idx = (output_format_idx + 1) if output_format_idx is not None else 0
+            readme_lines.insert(insert_idx, f"Detected genre: {public_genre}")
+            genre_seen = True
+            if not reason_seen:
+                readme_lines.insert(insert_idx + 1, f"Genre reason: {public_genre_reason}")
+                reason_seen = True
+        elif not reason_seen:
+            genre_idx = next(
+                idx for idx, line in enumerate(readme_lines)
+                if line.startswith("Detected genre:")
+            )
+            readme_lines.insert(genre_idx + 1, f"Genre reason: {public_genre_reason}")
+
+        # Replace Included Stems with exactly what survived final curation.
+        if "INCLUDED STEMS" in readme_lines:
+            included_idx = readme_lines.index("INCLUDED STEMS")
+            about_idx = next(
+                (
+                    idx for idx, line in enumerate(readme_lines)
+                    if line == "ABOUT THIS PACK" and idx > included_idx
+                ),
+                len(readme_lines),
+            )
+            included_block = [
+                "INCLUDED STEMS",
+                "--------------",
+                *[f"- {name}" for name in sorted(exported_files)],
+                "",
+            ]
+            readme_lines[included_idx:about_idx] = included_block
+        else:
+            about_idx = next(
+                (
+                    idx for idx, line in enumerate(readme_lines)
+                    if line == "ABOUT THIS PACK"
+                ),
+                len(readme_lines),
+            )
+            readme_lines[about_idx:about_idx] = [
+                "INCLUDED STEMS",
+                "--------------",
+                *[f"- {name}" for name in sorted(exported_files)],
+                "",
+            ]
+
+        # Insert final detector and G400 evidence immediately before the Included
+        # Stems section. This section must never silently disappear.
+        included_idx = readme_lines.index("INCLUDED STEMS")
+        detector_lines = [
+            "DETECTED INSTRUMENTS",
+            "--------------------",
+        ]
+        if public_detected_by_family:
+            display_names = {
+                "hh": "Hi-hat",
+                "double-bass": "Double Bass",
+                "french-horn": "French Horn",
+                "acoustic-guitar": "Acoustic Guitar",
+                "electric-guitar": "Electric Guitar",
+                "digital-piano": "Digital Piano",
+                "bowed-strings": "Bowed Strings",
+                "wind-chimes": "Wind Chimes",
+            }
+            for family, names in public_detected_by_family.items():
+                pretty = [
+                    display_names.get(name, name.replace("-", " ").title())
+                    for name in names
+                ]
+                detector_lines.append(f"{family}: {', '.join(pretty)}")
+        else:
+            detector_lines.append("No instruments reached the current detector confidence threshold.")
+
+        detector_lines.extend([
+            "",
+            "LITELABS G400 GENRE CANDIDATES",
+            "-----------------------------",
+        ])
+        if g400_items:
+            for item in g400_items[:5]:
+                detector_lines.append(
+                    f"{item.get('label')}: mean {float(item.get('mean', 0.0)):.3f}"
+                )
+            if broad_families:
+                detector_lines.append("")
+                detector_lines.append(
+                    "Broad families: " + ", ".join(
+                        f"{item.get('family')} {float(item.get('score', 0.0)):.3f}"
+                        for item in broad_families[:4]
+                    )
+                )
+        else:
+            detector_lines.append("No G400 genre evidence was available for this run.")
+        detector_lines.append("")
+        readme_lines[included_idx:included_idx] = detector_lines
+
+        (pack_root / "README.txt").write_text(
+            "\\n".join(readme_lines).rstrip() + "\\n",
+            encoding="utf-8",
+        )
 
         report["packaging"] = {
-            "policy": "curated_experimental_only_v2",
-            "pack_folder": pack_folder_name,
+            "policy": "curated_experimental_only_v3",
+            "archive_layout": "flat",
             "public_track": public_track,
             "worker_key": worker_key or None,
             "exported_files": sorted(exported_files),
             "omitted_files": omitted_files,
+            "public_detected_by_family": public_detected_by_family,
+            "public_genre": public_genre,
+            "g400_available": bool(g400_items),
         }
         (pack_root / f"{public_track}-EXPERIMENTAL_REPORT.json").write_text(
             json.dumps(_json_safe(report), indent=2),
@@ -204,9 +372,9 @@ packaging = '''        # experimental_pack_only_v2
 
         archive = root / f"{track}_experimental_stems.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
-            for p in sorted(pack_root.rglob("*")):
+            for p in sorted(pack_root.iterdir()):
                 if p.is_file():
-                    bundle.write(p, arcname=str(p.relative_to(root)))
+                    bundle.write(p, arcname=p.name)
 
 '''
 text = text[:start] + packaging + text[end:]
@@ -229,9 +397,9 @@ path.write_text(text, encoding='utf-8')
 
 check = path.read_text(encoding='utf-8')
 compile(check, str(path), 'exec')
-assert 'experimental_pack_only_v2' in check
-assert 'pack_folder_name' in check
-assert 'curated_experimental_only_v2' in check
+assert 'experimental_pack_only_v3' in check
+assert 'archive_layout": "flat' in check
+assert 'curated_experimental_only_v3' in check
 assert 'drums_5stem_kick": "kick"' in check
 assert 'wind_brass_family": "wind"' in check
 assert 'technical_residual' in check
