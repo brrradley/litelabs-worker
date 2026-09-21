@@ -17,16 +17,18 @@ clean_block = '''        # public_readme_inventory_final_v1
         inventory_readme = final / "README.txt"
         if inventory_readme.is_file():
             readme_text = inventory_readme.read_text(encoding="utf-8", errors="replace")
-            display_names = {
-                "hh": "Hi-hat",
-                "double-bass": "Double Bass",
-                "french-horn": "French Horn",
-                "acoustic-guitar": "Acoustic Guitar",
-                "electric-guitar": "Electric Guitar",
-                "digital-piano": "Digital Piano",
-                "bowed-strings": "Bowed Strings",
-                "wind-chimes": "Wind Chimes",
+            instrument_display_names = {
+                "acousticbassguitar": "Acoustic Bass Guitar",
+                "acousticguitar": "Acoustic Guitar",
+                "classicalguitar": "Classical Guitar",
+                "doublebass": "Double Bass",
+                "drummachine": "Drum Machine",
+                "electricguitar": "Electric Guitar",
+                "electricpiano": "Electric Piano",
+                "pipeorgan": "Pipe Organ",
+                "synthesizer": "Synthesizer",
             }
+            suppressed_public_instruments = {"computer", "voice"}
 
             # This is the final README composition point before ZIP packaging.
             # Remove any earlier/legacy genre lines, then write the canonical
@@ -47,13 +49,21 @@ clean_block = '''        # public_readme_inventory_final_v1
                 "DETECTED INSTRUMENTS",
                 "--------------------",
             ]
-            if detected_by_family:
-                for family, names in detected_by_family.items():
-                    pretty = [
-                        display_names.get(name, name.replace("-", " ").title())
-                        for name in names
-                    ]
-                    public_lines.append(f"{family}: {', '.join(pretty)}")
+            public_instruments = []
+            if instrument_report.get("ok"):
+                for item in instrument_report.get("detected_instruments") or []:
+                    raw_name = str(item.get("label") or "").strip().lower()
+                    if not raw_name or raw_name in suppressed_public_instruments:
+                        continue
+                    pretty_name = instrument_display_names.get(
+                        raw_name,
+                        raw_name.replace("_", " ").replace("-", " ").title(),
+                    )
+                    if pretty_name not in public_instruments:
+                        public_instruments.append(pretty_name)
+
+            if public_instruments:
+                public_lines.append(", ".join(public_instruments))
             else:
                 public_lines.append(
                     "No individual instruments reached the current confidence threshold."
@@ -131,6 +141,10 @@ except (IndentationError, SyntaxError) as exc:
 assert 'public_readme_inventory_final_v1' in check
 assert 'Detected genre: {detected_genre}' in check
 assert 'genre_report.get("genre")' in check
+assert 'instrument_report.get("detected_instruments")' in check
+assert '"computer", "voice"' in check
+assert '"electricguitar": "Electric Guitar"' in check
+assert '"doublebass": "Double Bass"' in check
 assert 'LITELABS G400 GENRE CANDIDATES' not in check
 assert 'ESSENTIA GENRE CANDIDATES' not in check
 print('LiteLABS final research README composition verified')
