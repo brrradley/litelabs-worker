@@ -351,6 +351,7 @@ assert '_experimental_stems.zip' in source
 assert '_parent_plus_experimental.zip' not in source
 assert 'root_parent_files' not in source
 assert 'experimental = final / "experimental"' not in source
+assert 'track = track[:-17]' in source
 assert '"drums_5stem_hats" in lower' in source
 assert 'experimental_children_v1' in handler_source
 assert 'genre_probe_handler_v1' in handler_source
