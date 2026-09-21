@@ -25,9 +25,8 @@ old = '''        lead_n = min(len(quality_lead), blend_n)
             "benchmark_id": "vocal_benchmark_v1",
             "files": vocal_files,
             "parent_recipe": "BS-RoFormer-SW vocals",
-            "lead_recipe": "corrected public role: SW vocals - fast SW->Becruily karaoke secondary/Instrumental",
-            "backing_recipe": "corrected public role: 25% SW + 75% MelBand Becruily vocal parent -> Becruily karaoke secondary/Instrumental",
-            "public_role_correction": "live_validation_swap_v1",
+            "lead_recipe": "25% SW + 75% MelBand Becruily vocal parent -> Becruily karaoke secondary/Instrumental",
+            "backing_recipe": "SW vocals - fast SW->Becruily karaoke secondary/Instrumental",
             "best_stems_share_single_parent_pair": False,
             "fast_backing_route_parent_reconstruction_cosine": round(float(_cos(fast_parent, fast_rebuilt)), 9),
             "fast_backing_route_residual_relative_to_parent_db": _db(fast_residual_rms / max(fast_parent_rms, 1e-12)),
@@ -155,8 +154,9 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
             "benchmark_id": "vocal_benchmark_v1",
             "files": vocal_files,
             "parent_recipe": "BS-RoFormer-SW vocals",
-            "lead_recipe": "25% SW + 75% MelBand Becruily vocal parent -> Becruily karaoke secondary/Instrumental",
-            "backing_recipe": "SW vocals - fast SW->Becruily karaoke secondary/Instrumental",
+            "lead_recipe": "corrected public role: SW vocals - fast SW->Becruily karaoke secondary/Instrumental",
+            "backing_recipe": "corrected public role: 25% SW + 75% MelBand Becruily vocal parent -> Becruily karaoke secondary/Instrumental",
+            "public_role_correction": "live_validation_swap_v1",
             "backing_detected": bool(duplicate_analysis["backing_detected"]),
             "backing_suppressed_reason": (
                 None if duplicate_analysis["backing_detected"]
