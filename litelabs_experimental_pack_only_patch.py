@@ -382,11 +382,11 @@ text = text[:start] + packaging + text[end:]
 # Historical result field names are misleading after curation.
 text = text.replace(
     '"root_parent_files": sorted(p.name for p in final.iterdir() if p.is_file()),',
-    '"pack_folder": pack_folder_name,\n            "exported_files": sorted(exported_files),\n            "omitted_files": omitted_files,',
+    '"archive_layout": "flat",\n            "exported_files": sorted(exported_files),\n            "omitted_files": omitted_files,',
 )
 text = text.replace(
     '"root_metadata_files": sorted(p.name for p in final.iterdir() if p.is_file()),',
-    '"pack_folder": pack_folder_name,\n            "exported_files": sorted(exported_files),\n            "omitted_files": omitted_files,',
+    '"archive_layout": "flat",\n            "exported_files": sorted(exported_files),\n            "omitted_files": omitted_files,',
 )
 text = text.replace(
     '"experimental_files": sorted(p.name for p in experimental.iterdir() if p.is_file()),',
@@ -406,4 +406,4 @@ assert 'technical_residual' in check
 assert 'dead_or_near_silent' in check
 assert '_parent_plus_experimental.zip' not in check
 assert '_experimental_stems.zip' in check
-print('LiteLABS curated Experimental-only pack policy v2 applied')
+print('LiteLABS curated Experimental-only flat pack policy v3 applied')
