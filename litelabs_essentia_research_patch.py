@@ -117,13 +117,6 @@ if 'essentia_research_second_opinion_v1' not in text:
             if found:
                 detected_by_family[family] = found
 
-        # Promote merged detector evidence into the canonical inventory report.
-        # This happens after Inst-MTG so downstream consumers do not see the
-        # stale Mega53-only snapshot.
-        global_inventory_report["detected"] = sorted(detected_instruments)
-        global_inventory_report["detected_by_family"] = detected_by_family
-        global_inventory_report["essentia"] = essentia_report
-
         # Genre remains secondary routing evidence, but G400 is the canonical
         # public/QA genre when available. The legacy parent heuristic is retained
         # only as an internal fallback when G400 genuinely has no result.
@@ -139,12 +132,6 @@ if 'essentia_research_second_opinion_v1' not in text:
                 f"(mean {float(research_genre_item.get('mean', 0.0)):.3f}, "
                 f"p90 {float(research_genre_item.get('p90', 0.0)):.3f})"
             )
-        global_inventory_report["detected_genre"] = research_genre
-        global_inventory_report["genre_reason"] = research_genre_reason
-        global_inventory_report["genre_top10"] = list(
-            essentia_report.get("genre_top10") or []
-        )[:10]
-
         # Feed the same canonical evidence into silent QA. This is deliberately
         # a source-text patch because the QA call lives in the inherited
         # production implementation.
@@ -165,14 +152,27 @@ if 'essentia_research_second_opinion_v1' not in text:
         raise RuntimeError('Could not locate global inventory report anchor for Essentia insertion')
     text = text.replace(anchor, block + anchor, 1)
 
-# Include Essentia evidence in the instrument inventory report.
+# Promote merged detector and G400 evidence into the canonical inventory report
+# at construction time. The Essentia block is inserted before the report dict,
+# so mutating global_inventory_report there would reference it before assignment.
 if '"essentia": essentia_report' not in text:
     anchor = '            "evidence": global_inventory,\n'
     if anchor not in text:
         raise RuntimeError('Could not locate inventory evidence field')
+    fields = (
+        '            "detected": sorted(detected_instruments),\n'
+        '            "detected_by_family": detected_by_family,\n'
+        '            "evidence": global_inventory,\n'
+        '            "essentia": essentia_report,\n'
+        '            "detected_genre": research_genre,\n'
+        '            "genre_reason": research_genre_reason,\n'
+        '            "genre_top10": list(essentia_report.get("genre_top10") or [])[:10],\n'
+    )
     text = text.replace(
-        anchor,
-        anchor + '            "essentia": essentia_report,\n',
+        '            "detected": sorted(detected_instruments),\n'
+        '            "detected_by_family": detected_by_family,\n'
+        '            "evidence": global_inventory,\n',
+        fields,
         1,
     )
 
