@@ -57,15 +57,14 @@ if '"lead_vocals_a" in lower' not in exp:
     exp = exp.replace(generic, replacement, 1)
 
 
-# Research pods are interactive rather than serverless, so allow a completed
-# archive to be copied out of the TemporaryDirectory before it is destroyed.
+# Research pods are interactive rather than serverless. Copy the finished
+# archive out of the TemporaryDirectory immediately before the final result is
+# returned; this anchor is deliberately independent of the upload implementation.
 if '"local_result_path": str(local_result_path) if local_result_path else None' not in exp:
-    upload_anchor = '''        uploaded = False
-        put_url = str(payload.get("result_put_url") or "").strip()
-        if put_url:
-'''
-    upload_replacement = '''        uploaded = False
-        local_result_path = None
+    finish_anchor = '        timings["total"] = round(time.monotonic() - started, 3)\n'
+    if finish_anchor not in exp:
+        raise RuntimeError("Could not locate final timing anchor for local research output")
+    local_copy = '''        local_result_path = None
         research_output_dir = str(payload.get("research_output_dir") or "").strip()
         if research_output_dir:
             import shutil
@@ -74,21 +73,17 @@ if '"local_result_path": str(local_result_path) if local_result_path else None' 
             local_result_path = output_root / archive.name
             shutil.copy2(archive, local_result_path)
 
-        put_url = str(payload.get("result_put_url") or "").strip()
-        if put_url:
 '''
-    if upload_anchor not in exp:
-        raise RuntimeError("Could not locate research archive upload anchor")
-    exp = exp.replace(upload_anchor, upload_replacement, 1)
+    exp = exp.replace(finish_anchor, local_copy + finish_anchor, 1)
 
-    result_anchor = '''            "result_url": payload.get("result_public_url"),
-            "root_parent_files":'''
-    result_replacement = '''            "result_url": payload.get("result_public_url"),
-            "local_result_path": str(local_result_path) if local_result_path else None,
-            "root_parent_files":'''
+    result_anchor = '            "uploaded": uploaded,\n'
     if result_anchor not in exp:
-        raise RuntimeError("Could not locate research result return anchor")
-    exp = exp.replace(result_anchor, result_replacement, 1)
+        raise RuntimeError("Could not locate result uploaded field for local research output")
+    exp = exp.replace(
+        result_anchor,
+        result_anchor + '            "local_result_path": str(local_result_path) if local_result_path else None,\n',
+        1,
+    )
 
 
 exp_path.write_text(exp, encoding="utf-8")
