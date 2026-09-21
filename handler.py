@@ -396,9 +396,14 @@ def handler(job: dict) -> dict:
     if payload.get("healthcheck") is True:
         return {"ok": True, "status": "ready", "service": "litelabs-worker", "default_mode": "routed_extraction_v1"}
 
+    mode = str(payload.get("mode") or "routed_extraction_v1").strip()
     audio_url = payload.get("audio_url")
-    if not audio_url:
+    local_audio_path = str(payload.get("audio_path") or payload.get("local_audio_path") or "").strip()
+
+    if mode != "genre_probe" and not audio_url:
         return {"ok": False, "error": "Missing required input.audio_url"}
+    if mode == "genre_probe" and not audio_url and not local_audio_path:
+        return {"ok": False, "mode": mode, "error": "genre_probe requires input.audio_url or input.audio_path"}
 
     result_put_url = payload.get("result_put_url")
     result_public_url = payload.get("result_public_url")
@@ -409,15 +414,30 @@ def handler(job: dict) -> dict:
     def progress(message: str, percent: int) -> None:
         post_progress(progress_url, progress_token, progress_job_id, message, percent)
 
-    mode = str(payload.get("mode") or "routed_extraction_v1").strip()
-
     if mode == "genre_probe":
         try:
-            filename = str(payload.get("filename") or Path(urlparse(audio_url).path).name or "track.audio")
             timeout_seconds = max(30, int(payload.get("genre_timeout_seconds") or 300))
             with tempfile.TemporaryDirectory(prefix="litelabs_genre_probe_") as temp_dir:
-                input_path = Path(temp_dir) / filename
-                download_file(audio_url, input_path)
+                if local_audio_path:
+                    input_path = Path(local_audio_path).expanduser().resolve()
+                    allowed_root = Path("/tmp").resolve()
+                    if allowed_root not in input_path.parents:
+                        return {
+                            "ok": False,
+                            "mode": mode,
+                            "error": "genre_probe local audio_path must be inside /tmp",
+                        }
+                    if not input_path.is_file():
+                        return {
+                            "ok": False,
+                            "mode": mode,
+                            "error": f"Local audio file not found: {input_path}",
+                        }
+                    filename = str(payload.get("filename") or input_path.name)
+                else:
+                    filename = str(payload.get("filename") or Path(urlparse(audio_url).path).name or "track.audio")
+                    input_path = Path(temp_dir) / filename
+                    download_file(audio_url, input_path)
 
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = "-1"
