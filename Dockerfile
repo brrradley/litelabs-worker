@@ -323,6 +323,11 @@ assert 'serving_default_model_Placeholder' in essentia_source
 assert 'PartitionedCall' in essentia_source
 assert 'model/Placeholder' in essentia_source
 assert 'model/Sigmoid' in essentia_source
+assert 'graph_filename.name.startswith("mtg_jamendo_instrument-")' in essentia_source
+assert 'output="PartitionedCall:0"' in essentia_source
+assert 'def _cli() -> int:' in essentia_source
+assert 'CUDA_VISIBLE_DEVICES' in source
+assert 'Essentia subprocess failed' in source
 multilead_source = Path('/app/multilead_research.py').read_text(encoding='utf-8')
 assert 'model.float()' in multilead_source
 assert 'torch.autocast' not in multilead_source
