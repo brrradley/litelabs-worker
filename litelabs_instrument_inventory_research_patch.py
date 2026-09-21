@@ -135,38 +135,11 @@ if 'global_instrument_inventory_v1' not in text:
         raise RuntimeError('Could not locate instrumental write anchor for global inventory')
     text = text.replace(anchor, anchor + block, 1)
 
-# Gate the full DrumSep inference. Do not spend the GPU pass merely because a
-# broad percussion parent exists.
-start_marker = '        emit("Running DrumSep 5-Stem Decomposition", 32)\n'
-end_candidates = [
-    '        # LiteLABS locked vocal benchmark v1.',
-    '        # Split the already-clean RoFormer vocal parent with a dedicated',
-    '        # Mega53 is the routing brain:',
-]
-if 'run_drumsep_from_inventory' in text and 'inventory_skipped_no_specific_kit' not in text:
-    start = text.find(start_marker)
-    end = -1
-    for marker in end_candidates:
-        pos = text.find(marker, start + 1)
-        if pos >= 0 and (end < 0 or pos < end):
-            end = pos
-    if start < 0 or end < 0:
-        raise RuntimeError('Could not locate DrumSep block boundaries')
-    original = text[start:end]
-    indented = ''.join(('    ' + line if line.strip() else line) for line in original.splitlines(True))
-    replacement = '''        if run_drumsep_from_inventory:
-''' + indented + '''        else:
-            emit("Skipping DrumSep — no specific kit parts detected", 39)
-            drum_report = {
-                "ok": True,
-                "ran": False,
-                "files": [],
-                "reason": "inventory_skipped_no_specific_kit",
-                "detected_kit_parts": detected_kit_parts,
-            }
-
-'''
-    text = text[:start] + replacement + text[end:]
+# Keep DrumSep observational in this first inventory benchmark. We record whether
+# the inventory would have skipped it, but do not suppress the pass until the
+# detector has been validated against several known tracks. This avoids turning
+# a new detector threshold into a destructive routing decision.
+# The report's drumsep_route.run is the candidate policy for the next step.
 
 # Reuse the global inventory for the existing wind/sax family router instead of
 # paying for a second Mega53 pass over the Other parent.
