@@ -175,18 +175,18 @@ packaging = '''        # experimental_pack_only_v2
         readme_source = final / "README.txt"
         if readme_source.is_file():
             readme_text = readme_source.read_text(encoding="utf-8", errors="replace")
-            heading = "INCLUDED STEMS\n--------------"
+            heading = "INCLUDED STEMS\\n--------------"
             if heading in readme_text:
                 before, after = readme_text.split(heading, 1)
                 tail = after
-                split_at = tail.find("\n\n")
+                split_at = tail.find("\\n\\n")
                 if split_at >= 0:
                     tail = tail[split_at + 2:]
-                included = "\n".join(f"- {name}" for name in sorted(exported_files))
-                readme_text = before + heading + "\n" + included + "\n\n" + tail
+                included = "\\n".join(f"- {name}" for name in sorted(exported_files))
+                readme_text = before + heading + "\\n" + included + "\\n\\n" + tail
             else:
-                included = "\n".join(f"- {name}" for name in sorted(exported_files))
-                readme_text += "\n\n" + heading + "\n" + included + "\n"
+                included = "\\n".join(f"- {name}" for name in sorted(exported_files))
+                readme_text += "\\n\\n" + heading + "\\n" + included + "\\n"
             (pack_root / "README.txt").write_text(readme_text, encoding="utf-8")
 
         report["packaging"] = {
