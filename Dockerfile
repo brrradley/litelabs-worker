@@ -15,6 +15,7 @@ COPY litelabs_vocal_duplicate_guard_patch.py /app/litelabs_vocal_duplicate_guard
 COPY multilead_research.py /app/multilead_research.py
 COPY research_run_experimental.py /app/research_run_experimental.py
 COPY litelabs_multilead_research_patch.py /app/litelabs_multilead_research_patch.py
+COPY litelabs_instrument_inventory_research_patch.py /app/litelabs_instrument_inventory_research_patch.py
 COPY litelabs_qa_learning_hotfix.py /app/litelabs_qa_learning_hotfix.py
 COPY litelabs_build_identity_patch.py /app/litelabs_build_identity_patch.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
@@ -138,8 +139,9 @@ RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_vocal_duplicate_guard_patch.py \
     && python /app/litelabs_qa_learning_hotfix.py \
     && python /app/litelabs_multilead_research_patch.py \
+    && python /app/litelabs_instrument_inventory_research_patch.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/research_run_experimental.py /app/litelabs_multilead_research_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/research_run_experimental.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -194,6 +196,10 @@ assert 'complement_residual' in qa_source
 assert 'research_multi_lead' in source
 assert 'multi_lead_medleyvox' in source
 assert '"multi_lead_children": ("lead_vocals_a", "lead_vocals_b")' in qa_source
+assert 'global_instrument_inventory_v1' in source
+assert 'inventory_skipped_no_specific_kit' in source
+assert 'global_inventory_reused_for_family_router' in source
+assert 'DETECTED INSTRUMENTS' in source
 assert '"drums_5stem_hats" in lower' in source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
