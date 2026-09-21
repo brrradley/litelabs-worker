@@ -274,7 +274,7 @@ assert 'DETECTED INSTRUMENTS' in source
 assert 'genre_probe_pre_stem_v1' in source
 assert 'genre_probe_complete_before_stems_v1' in source
 assert '["python", "-u", "/app/genre_probe.py", str(downloaded)]' in source
-assert source.index('genre_probe_complete_before_stems_v1') < source.index('Running BS-RoFormer Parent Separation')
+assert source.index('genre_probe_complete_before_stems_v1') < source.index('rc, elapsed = _run_polled(')
 assert '"genre_analysis": genre_report' in source
 multilead_source = Path('/app/multilead_research.py').read_text(encoding='utf-8')
 assert 'model.float()' in multilead_source
