@@ -250,6 +250,8 @@ assert 'gain_scaled_duplicate_of_lead' in source
 assert 'public_role_correction' in source
 assert 'acoustic_role_validation_v2' in source
 assert '_vx_role_evidence' in source
+assert 'direct_backing_path = _vx_find_output(fast_out, "vocals")' in source
+assert 'parent_minus_fast_secondary' in source
 assert '"backing_detected": bool(backing_exported)' in source
 
 # HH and cymbals remain one DrumSep inference but are merged before encoding.
@@ -298,6 +300,9 @@ assert 'curated_experimental_only_v3' in source
 assert '"archive_layout": "flat"' in source
 assert 'bundle.write(p, arcname=p.name)' in source
 assert 'public_detected_by_family' in source
+assert 'research_genre' in source
+assert '"detected_instruments": sorted(detected_instruments)' in source
+assert '"detected_by_family": detected_by_family' in source
 assert 'heuristic genre kept internal only' in source
 assert 'dead_or_near_silent' in source
 assert '"drums_5stem_kick": "kick"' in source
@@ -308,6 +313,7 @@ assert 'root_parent_files' not in source
 assert '"drums_5stem_hats" in lower' in source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
+assert 'metadata_key in ("detected_instruments", "detected_by_family", "genre_top10", "genre_broad_families")' in qa_source
 
 # Required frozen assets.
 for path in (
