@@ -21,6 +21,7 @@ COPY litelabs_instrument_inventory_research_patch.py /app/litelabs_instrument_in
 COPY litelabs_essentia_research_patch.py /app/litelabs_essentia_research_patch.py
 COPY litelabs_public_readme_model_redaction_patch.py /app/litelabs_public_readme_model_redaction_patch.py
 COPY litelabs_research_readme_finalizer_patch.py /app/litelabs_research_readme_finalizer_patch.py
+COPY litelabs_experimental_pack_only_patch.py /app/litelabs_experimental_pack_only_patch.py
 COPY litelabs_qa_learning_hotfix.py /app/litelabs_qa_learning_hotfix.py
 COPY litelabs_build_identity_patch.py /app/litelabs_build_identity_patch.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
@@ -184,8 +185,9 @@ RUN chmod +x /app/run_flower_duet_research.sh \
     && python /app/litelabs_essentia_research_patch.py \
     && python /app/litelabs_public_readme_model_redaction_patch.py \
     && python /app/litelabs_research_readme_finalizer_patch.py \
+    && python /app/litelabs_experimental_pack_only_patch.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/research_run_experimental.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/research_run_experimental.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_experimental_pack_only_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -256,6 +258,10 @@ assert 'torch.autocast' not in multilead_source
 assert 'LITELABS G400 GENRE CANDIDATES' in source
 assert 'ESSENTIA GENRE CANDIDATES' not in source
 assert 'public_readme_inventory_final_v1' in source
+assert 'experimental_pack_only_v1' in source
+assert '_experimental_stems.zip' in source
+assert '_parent_plus_experimental.zip' not in source
+assert 'root_parent_files' not in source
 entry_source = Path('/app/run_flower_duet_research.sh').read_text(encoding='utf-8')
 assert '02%20Lakme_%20Sous%20le%20dome%20Epais%20%28The%20Flower%20Duet%29.mp3' in entry_source
 assert 'research_run_experimental.py' in entry_source
