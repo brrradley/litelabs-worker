@@ -191,72 +191,62 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
                 "vocal_like": False,
             }
         )
-
-        # Lead stays on the benchmark quality route when it behaves like vocals.
-        # If not, prefer the fast secondary route before ever falling back to an
-        # arithmetic residual.
         fast_secondary_evidence = _vx_role_evidence(fast_lead, sw_vocals_audio, mixture)
-        if quality_evidence["vocal_like"]:
-            public_lead = best_lead
-            public_lead_route = "quality"
-        elif fast_secondary_evidence["vocal_like"]:
-            public_lead = fast_lead
-            public_lead_route = "fast_secondary"
-        else:
-            public_lead = best_lead
-            public_lead_route = "quality_fallback"
 
-        # Backing candidates are scored explicitly for vocal character and
-        # rejection of the instrumental complement. Prefer the model's direct
-        # Vocals output when it is cleaner than the arithmetic residual.
-        backing_candidates = []
-        if direct_backing is not None:
-            backing_candidates.append((
-                "direct_primary",
-                direct_backing,
-                direct_backing_evidence,
-            ))
-        backing_candidates.append((
-            "parent_minus_fast_secondary",
-            best_backing,
-            residual_evidence,
-        ))
+        # live_validated_vocal_roles_v3
+        # Live auditioning established that the quality karaoke output can be a
+        # clean backing-vocal subset while a separate candidate can still carry
+        # the entire vocal parent. Do not export an "all vocals" file as backing.
+        #
+        # Use the trusted SW vocal parent as the mass-conserving vocal reference:
+        #   backing = validated backing subset
+        #   lead    = SW vocal parent - backing
+        #
+        # This guarantees lead + backing reconstruct the vocal parent and makes
+        # the public labels independent of ambiguous model output filenames.
+        parent_vocals = np.asarray(fast_parent, dtype=np.float32)
+        backing_raw = np.asarray(best_lead, dtype=np.float32)
+        vocal_n = min(len(parent_vocals), len(backing_raw))
+        parent_vocals = parent_vocals[:vocal_n]
+        backing_raw = backing_raw[:vocal_n]
 
-        def _vx_backing_score(item):
-            _route, _audio, evidence = item
-            return (
-                float(evidence.get("vocal_margin", -1.0))
-                - 0.35 * float(evidence.get("instrumental_cosine", 1.0))
-            )
+        parent_flat = np.asarray(parent_vocals, dtype=np.float64).reshape(-1)
+        backing_flat = np.asarray(backing_raw, dtype=np.float64).reshape(-1)
+        parent_rms = float(np.sqrt(np.mean(parent_flat * parent_flat) + 1e-12))
+        backing_rms = float(np.sqrt(np.mean(backing_flat * backing_flat) + 1e-12))
+        backing_to_parent_ratio = backing_rms / max(parent_rms, 1e-12)
+        backing_parent_cosine = abs(float(_cos(backing_raw, parent_vocals)))
 
-        backing_candidates = sorted(
-            backing_candidates,
-            key=_vx_backing_score,
-            reverse=True,
+        # A useful backing subset should be meaningfully smaller than the entire
+        # vocal parent while still clearly belonging to it. If it fails this
+        # check, omit backing rather than exporting an all-vocal impostor.
+        backing_subset_valid = bool(
+            vocal_n > 0
+            and backing_to_parent_ratio >= 0.025
+            and backing_to_parent_ratio <= 0.88
+            and backing_parent_cosine >= 0.10
         )
-        backing_route = "rejected"
-        backing_candidate = None
-        backing_evidence = None
-        for candidate_route, candidate_audio, candidate_evidence in backing_candidates:
-            if not candidate_evidence.get("vocal_like"):
-                continue
-            if float(candidate_evidence.get("vocal_margin", -1.0)) < 0.08:
-                continue
-            if float(candidate_evidence.get("instrumental_cosine", 1.0)) > 0.45:
-                continue
-            backing_route = candidate_route
-            backing_candidate = candidate_audio
-            backing_evidence = candidate_evidence
-            break
 
-        backing_is_vocal = backing_candidate is not None
+        backing_gain = 1.0
+        if backing_subset_valid:
+            denom = float(np.dot(backing_flat, backing_flat))
+            if denom > 1e-12:
+                fitted_gain = float(np.dot(parent_flat, backing_flat) / denom)
+                if np.isfinite(fitted_gain):
+                    backing_gain = float(np.clip(fitted_gain, 0.65, 1.35))
+
+        public_backing = np.asarray(backing_raw * backing_gain, dtype=np.float32)
+        public_lead = np.asarray(parent_vocals - public_backing, dtype=np.float32)
+        public_lead_route = "sw_parent_minus_live_validated_backing"
+        backing_route = "quality_karaoke_live_validated_backing"
+
         duplicate_analysis = (
-            _vx_scaled_duplicate_analysis(public_lead, backing_candidate, vocal_sr)
-            if backing_is_vocal
+            _vx_scaled_duplicate_analysis(public_lead, public_backing, vocal_sr)
+            if backing_subset_valid
             else {
                 "backing_detected": False,
                 "suppressed_as_gain_scaled_duplicate": False,
-                "reason": "rejected_as_non_vocal_or_ambiguous",
+                "reason": "quality_candidate_not_valid_backing_subset",
             }
         )
 
@@ -264,12 +254,13 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
         backing_dest = experimental / f"{track}_backing_vocals.flac"
         _write_flac(lead_dest, public_lead, vocal_sr)
         vocal_files = [lead_dest.name]
+
         backing_exported = bool(
-            backing_is_vocal
+            backing_subset_valid
             and duplicate_analysis.get("backing_detected")
         )
         if backing_exported:
-            _write_flac(backing_dest, backing_candidate, vocal_sr)
+            _write_flac(backing_dest, public_backing, vocal_sr)
             vocal_files.append(backing_dest.name)
 
         fast_rebuilt = fast_lead + best_backing
@@ -288,12 +279,19 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
             "parent_recipe": "BS-RoFormer-SW vocals",
             "lead_recipe": public_lead_route,
             "backing_recipe": backing_route,
-            "public_role_correction": "acoustic_role_validation_v2",
+            "public_role_correction": "live_validated_vocal_roles_v3",
+            "vocal_mass_conservation": "lead_plus_backing_equals_sw_vocal_parent",
+            "backing_subset_validation": {
+                "valid": bool(backing_subset_valid),
+                "rms_ratio_to_parent": round(float(backing_to_parent_ratio), 6),
+                "parent_cosine": round(float(backing_parent_cosine), 6),
+                "fitted_gain": round(float(backing_gain), 6),
+            },
             "vocal_role_evidence": {
-                "quality": quality_evidence,
+                "quality_backing_candidate": quality_evidence,
                 "fast_secondary": fast_secondary_evidence,
                 "direct_primary": direct_backing_evidence,
-                "residual": residual_evidence,
+                "legacy_residual": residual_evidence,
             },
             "backing_detected": bool(backing_exported),
             "backing_suppressed_reason": (
@@ -331,7 +329,8 @@ exp_path.write_text(text, encoding='utf-8')
 
 check = exp_path.read_text(encoding='utf-8')
 assert 'suppressed_as_gain_scaled_duplicate' in check
-assert 'acoustic_role_validation_v2' in check
+assert 'live_validated_vocal_roles_v3' in check
+assert 'lead_plus_backing_equals_sw_vocal_parent' in check
 assert '_vx_role_evidence' in check
 assert '"backing_detected": bool(backing_exported)' in check
 assert 'gain_scaled_duplicate_of_lead' in check
