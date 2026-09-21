@@ -37,6 +37,16 @@ old = '''        lead_n = min(len(quality_lead), blend_n)
 new = '''        lead_n = min(len(quality_lead), blend_n)
         best_lead = np.asarray(quality_lead[:lead_n], dtype=np.float32)
 
+        # The karaoke run already produced both outputs. Keep the model's direct
+        # primary/Vocals output as a backing candidate instead of assuming the
+        # arithmetic parent-minus-secondary residual is always backing.
+        direct_backing_path = _vx_find_output(fast_out, "vocals")
+        direct_backing = None
+        if direct_backing_path is not None:
+            direct_backing, _ = _read(direct_backing_path)
+            direct_n = min(len(direct_backing), len(fast_parent))
+            direct_backing = np.asarray(direct_backing[:direct_n], dtype=np.float32)
+
         def _vx_scaled_duplicate_analysis(lead_audio, backing_audio, sr):
             """Detect a backing stem that is mostly a gain-scaled copy of lead."""
             lead_arr = np.asarray(lead_audio, dtype=np.float32)
@@ -171,35 +181,75 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
 
         quality_evidence = _vx_role_evidence(best_lead, sw_vocals_audio, mixture)
         residual_evidence = _vx_role_evidence(best_backing, sw_vocals_audio, mixture)
+        direct_backing_evidence = (
+            _vx_role_evidence(direct_backing, sw_vocals_audio, mixture)
+            if direct_backing is not None
+            else {
+                "vocal_cosine": 0.0,
+                "instrumental_cosine": 1.0,
+                "vocal_margin": -1.0,
+                "vocal_like": False,
+            }
+        )
 
-        # Keep the benchmark-preferred quality route as lead when it is genuinely
-        # vocal-like. If it looks like accompaniment, fall back to the residual
-        # route rather than exporting music under a vocal label.
+        # Lead stays on the benchmark quality route when it behaves like vocals.
+        # If not, prefer the fast secondary route before ever falling back to an
+        # arithmetic residual.
+        fast_secondary_evidence = _vx_role_evidence(fast_lead, sw_vocals_audio, mixture)
         if quality_evidence["vocal_like"]:
             public_lead = best_lead
             public_lead_route = "quality"
-            backing_candidate = best_backing
-            backing_evidence = residual_evidence
-            backing_route = "residual"
-        elif residual_evidence["vocal_like"]:
-            public_lead = best_backing
-            public_lead_route = "residual"
-            backing_candidate = best_lead
-            backing_evidence = quality_evidence
-            backing_route = "quality"
+        elif fast_secondary_evidence["vocal_like"]:
+            public_lead = fast_lead
+            public_lead_route = "fast_secondary"
         else:
-            # Both specialists are ambiguous. The residual route is constrained
-            # to the SW vocal parent, so it is the safer lead fallback.
-            public_lead = best_backing
-            public_lead_route = "residual_fallback"
-            backing_candidate = None
-            backing_evidence = quality_evidence
-            backing_route = "quality_rejected"
+            public_lead = best_lead
+            public_lead_route = "quality_fallback"
 
-        backing_is_vocal = bool(
-            backing_candidate is not None
-            and backing_evidence.get("vocal_like")
+        # Backing candidates are scored explicitly for vocal character and
+        # rejection of the instrumental complement. Prefer the model's direct
+        # Vocals output when it is cleaner than the arithmetic residual.
+        backing_candidates = []
+        if direct_backing is not None:
+            backing_candidates.append((
+                "direct_primary",
+                direct_backing,
+                direct_backing_evidence,
+            ))
+        backing_candidates.append((
+            "parent_minus_fast_secondary",
+            best_backing,
+            residual_evidence,
+        ))
+
+        def _vx_backing_score(item):
+            _route, _audio, evidence = item
+            return (
+                float(evidence.get("vocal_margin", -1.0))
+                - 0.35 * float(evidence.get("instrumental_cosine", 1.0))
+            )
+
+        backing_candidates = sorted(
+            backing_candidates,
+            key=_vx_backing_score,
+            reverse=True,
         )
+        backing_route = "rejected"
+        backing_candidate = None
+        backing_evidence = None
+        for candidate_route, candidate_audio, candidate_evidence in backing_candidates:
+            if not candidate_evidence.get("vocal_like"):
+                continue
+            if float(candidate_evidence.get("vocal_margin", -1.0)) < 0.08:
+                continue
+            if float(candidate_evidence.get("instrumental_cosine", 1.0)) > 0.45:
+                continue
+            backing_route = candidate_route
+            backing_candidate = candidate_audio
+            backing_evidence = candidate_evidence
+            break
+
+        backing_is_vocal = backing_candidate is not None
         duplicate_analysis = (
             _vx_scaled_duplicate_analysis(public_lead, backing_candidate, vocal_sr)
             if backing_is_vocal
@@ -241,6 +291,8 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
             "public_role_correction": "acoustic_role_validation_v2",
             "vocal_role_evidence": {
                 "quality": quality_evidence,
+                "fast_secondary": fast_secondary_evidence,
+                "direct_primary": direct_backing_evidence,
                 "residual": residual_evidence,
             },
             "backing_detected": bool(backing_exported),
