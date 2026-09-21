@@ -298,8 +298,12 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
                 None if backing_exported
                 else (
                     "gain_scaled_duplicate_of_lead"
-                    if backing_is_vocal and duplicate_analysis.get("suppressed_as_gain_scaled_duplicate")
-                    else "rejected_as_non_vocal_or_ambiguous"
+                    if duplicate_analysis.get("suppressed_as_gain_scaled_duplicate")
+                    else (
+                        "quality_candidate_not_valid_backing_subset"
+                        if not backing_subset_valid
+                        else "rejected_as_non_vocal_or_ambiguous"
+                    )
                 )
             ),
             "backing_duplicate_analysis": duplicate_analysis,
@@ -333,5 +337,6 @@ assert 'live_validated_vocal_roles_v3' in check
 assert 'lead_plus_backing_equals_sw_vocal_parent' in check
 assert '_vx_role_evidence' in check
 assert '"backing_detected": bool(backing_exported)' in check
+assert 'backing_is_vocal' not in check
 assert 'gain_scaled_duplicate_of_lead' in check
 print('LiteLABS gain-scaled duplicate backing-vocal guard applied')
