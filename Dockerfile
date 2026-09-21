@@ -103,47 +103,84 @@ from pathlib import Path
 import requests
 
 assets = {
-    "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.pb":
-        Path("/models/essentia/discogs-effnet-bs64-1.pb"),
-    "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb":
-        Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb"),
-    "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.json":
-        Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.json"),
-    "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb":
-        Path("/models/essentia/genre_discogs400-discogs-effnet-1.pb"),
-    "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json":
-        Path("/models/essentia/genre_discogs400-discogs-effnet-1.json"),
+    Path("/models/essentia/discogs-effnet-bs64-1.pb"): [
+        "https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb",
+        "https://huggingface.co/spaces/omgitsqing/hum_me_a_melody/resolve/main/tf_graph_files/discogs-effnet-bs64-1.pb?download=true",
+    ],
+    Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb"): [
+        "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb",
+        "http://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb",
+    ],
+    Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.json"): [
+        "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.json",
+        "http://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.json",
+    ],
+    Path("/models/essentia/genre_discogs400-discogs-effnet-1.pb"): [
+        "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb",
+        "http://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb",
+    ],
+    Path("/models/essentia/genre_discogs400-discogs-effnet-1.json"): [
+        "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json",
+        "http://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json",
+    ],
 }
+
+import hashlib
 import time
 
-def download(url: str, path: Path, attempts: int = 5) -> None:
-    tmp = path.with_suffix(path.suffix + ".part")
-    for attempt in range(1, attempts + 1):
-        try:
-            tmp.unlink(missing_ok=True)
-            with requests.get(url, stream=True, timeout=(90, 1800)) as response:
-                response.raise_for_status()
-                with tmp.open("wb") as handle:
-                    for chunk in response.iter_content(4 * 1024 * 1024):
-                        if chunk:
-                            handle.write(chunk)
-            if tmp.stat().st_size <= 0:
-                raise RuntimeError(f"Empty Essentia asset: {path}")
-            tmp.replace(path)
-            return
-        except Exception as exc:
-            tmp.unlink(missing_ok=True)
-            if attempt >= attempts:
-                raise
-            wait = min(60, 2 ** attempt)
-            print(
-                f"Essentia download attempt {attempt}/{attempts} failed for {path.name}: {exc}; retrying in {wait}s",
-                flush=True,
-            )
-            time.sleep(wait)
+expected_sha256 = {
+    "discogs-effnet-bs64-1.pb": "3ed9af50d5367c0b9c795b294b00e7599e4943244f4cbd376869f3bfc87721b1",
+    "mtg_jamendo_instrument-discogs-effnet-1.pb": "2e8c3003c722e098da371b6a1f7ad0ce62fac0dcfc09c7c7997d430941196c2a",
+}
 
-for url, path in assets.items():
-    download(url, path)
+def download(urls: list[str], path: Path, attempts_per_url: int = 2) -> None:
+    tmp = path.with_suffix(path.suffix + ".part")
+    errors = []
+    for url in urls:
+        for attempt in range(1, attempts_per_url + 1):
+            try:
+                tmp.unlink(missing_ok=True)
+                with requests.get(
+                    url,
+                    stream=True,
+                    timeout=(20, 1800),
+                    allow_redirects=True,
+                ) as response:
+                    response.raise_for_status()
+                    with tmp.open("wb") as handle:
+                        for chunk in response.iter_content(4 * 1024 * 1024):
+                            if chunk:
+                                handle.write(chunk)
+                if tmp.stat().st_size <= 0:
+                    raise RuntimeError(f"Empty Essentia asset: {path}")
+
+                expected = expected_sha256.get(path.name)
+                if expected:
+                    digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
+                    if digest != expected:
+                        raise RuntimeError(
+                            f"SHA256 mismatch for {path.name}: {digest}"
+                        )
+
+                tmp.replace(path)
+                print(
+                    f"Essentia asset ready: {path.name} via {url.split('/')[2]}",
+                    flush=True,
+                )
+                return
+            except Exception as exc:
+                tmp.unlink(missing_ok=True)
+                errors.append(f"{url} attempt {attempt}: {exc}")
+                if attempt < attempts_per_url:
+                    time.sleep(2 ** attempt)
+
+    raise RuntimeError(
+        f"Unable to download Essentia asset {path.name}: "
+        + " | ".join(errors)
+    )
+
+for path, urls in assets.items():
+    download(urls, path)
 print("Research Essentia models downloaded")
 PY
 RUN python - <<'PY'
