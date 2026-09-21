@@ -6,30 +6,54 @@ qa_path = Path("/app/qa_research.py")
 exp = exp_path.read_text(encoding="utf-8")
 
 anchor = "        # Mega53 is the routing brain:"
-block = '''        # Experimental multi-singer branch. Experimental is currently
-        # admin-only at the addon/usergroup layer, so run this path on every
-        # Experimental extraction and keep it fail-open.
+block = '''        # Experimental multi-singer branch. This specialist is expensive, so
+        # do not run it merely because backing vocals exist. Until an acoustic
+        # co-lead detector is validated, require explicit multi-lead evidence
+        # from the request metadata.
+        raw_lead_count = payload.get("lead_singer_count")
         try:
-            from multilead_research import run_multilead_research
-            multi_lead_report = run_multilead_research(
-                stems["vocals"],
-                experimental,
-                track,
-                progress=progress,
-            )
-            vocal_report["multi_lead"] = multi_lead_report
-            timings["multi_lead_medleyvox"] = float(multi_lead_report.get("runtime_seconds") or 0.0)
-            vocal_files.extend([
-                name for name in multi_lead_report.get("files", [])
-                if name not in vocal_files
-            ])
-        except Exception as exc:
-            vocal_report["multi_lead"] = {
+            lead_singer_count = int(raw_lead_count) if raw_lead_count is not None else 1
+        except (TypeError, ValueError):
+            lead_singer_count = 1
+        multi_lead_requested = bool(
+            payload.get("multi_lead")
+            or payload.get("multiple_lead_singers")
+            or lead_singer_count > 1
+        )
+
+        if multi_lead_requested:
+            try:
+                from multilead_research import run_multilead_research
+                multi_lead_report = run_multilead_research(
+                    stems["vocals"],
+                    experimental,
+                    track,
+                    progress=progress,
+                )
+                vocal_report["multi_lead"] = multi_lead_report
+                timings["multi_lead_medleyvox"] = float(multi_lead_report.get("runtime_seconds") or 0.0)
+                vocal_files.extend([
+                    name for name in multi_lead_report.get("files", [])
+                    if name not in vocal_files
+                ])
+            except Exception as exc:
+                vocal_report["multi_lead"] = {
+                    "ok": False,
+                    "requested": True,
+                    "error": str(exc),
+                    "error_type": exc.__class__.__name__,
+                }
+                print(f"LiteLABS multi-lead separation skipped: {exc}", flush=True)
+        else:
+            multi_lead_report = {
                 "ok": False,
-                "error": str(exc),
-                "error_type": exc.__class__.__name__,
+                "requested": False,
+                "skipped": True,
+                "reason": "no_multi_lead_evidence",
             }
-            print(f"LiteLABS multi-lead separation skipped: {exc}", flush=True)
+            vocal_report["multi_lead"] = multi_lead_report
+            timings["multi_lead_medleyvox"] = 0.0
+            print("LiteLABS multi-lead separation skipped: no multi-lead evidence", flush=True)
 
 '''
 if "multi_lead_medleyvox" not in exp:
