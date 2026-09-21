@@ -13,8 +13,6 @@ COPY litelabs_drum_hats_compat_patch.py /app/litelabs_drum_hats_compat_patch.py
 COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.py
 COPY litelabs_vocal_duplicate_guard_patch.py /app/litelabs_vocal_duplicate_guard_patch.py
 COPY multilead_research.py /app/multilead_research.py
-COPY research_run_experimental.py /app/research_run_experimental.py
-COPY run_flower_duet_research.sh /app/run_flower_duet_research.sh
 COPY essentia_research.py /app/essentia_research.py
 COPY litelabs_multilead_research_patch.py /app/litelabs_multilead_research_patch.py
 COPY litelabs_instrument_inventory_research_patch.py /app/litelabs_instrument_inventory_research_patch.py
@@ -97,7 +95,7 @@ for url, path, expected in ASSETS:
 print('Locked Becruily vocal benchmark models baked and verified')
 PY
 
-# Research-only Essentia second-opinion detector.
+# Experimental Essentia second-opinion detector.
 RUN python -m pip install --no-cache-dir --pre essentia-tensorflow \
     && mkdir -p /models/essentia \
     && python - <<'PY'
@@ -153,9 +151,8 @@ from essentia.standard import TensorflowPredict2D, TensorflowPredictEffnetDiscog
 print("Essentia TensorFlow import smoke test passed")
 PY
 
-# Research-only MedleyVox duet/co-lead experiment. Production/main never sees
-# these dependencies or weights. The model runs at 24 kHz and is used only when
-# input.research_multi_lead=true on the research image.
+# Experimental MedleyVox duet/co-lead separator. The model runs at 24 kHz and
+# is enabled for the Experimental preset, which is restricted by site usergroups.
 RUN python -m pip install --no-cache-dir "asteroid==0.7.0" "pyloudnorm>=0.1.1" "praat-parselmouth>=0.4.5" \
     && rm -rf /opt/medleyvox \
     && git clone https://github.com/SUC-DriverOld/MedleyVox-Inference-WebUI.git /opt/medleyvox \
@@ -196,8 +193,7 @@ PY
 # Apply production changes to known source files. QA is deliberately reset above
 # before its hotfix so an inherited partial patch cannot leave a local variable
 # defined only on some code paths.
-RUN chmod +x /app/run_flower_duet_research.sh \
-    && python /app/litelabs_drum_hats_compat_patch.py \
+RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_locked_vocal_hats_patch.py \
     && python /app/litelabs_vocal_duplicate_guard_patch.py \
     && python /app/litelabs_qa_learning_hotfix.py \
@@ -208,7 +204,7 @@ RUN chmod +x /app/run_flower_duet_research.sh \
     && python /app/litelabs_research_readme_finalizer_patch.py \
     && python /app/litelabs_experimental_pack_only_patch.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/research_run_experimental.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_experimental_pack_only_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_experimental_pack_only_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -263,7 +259,6 @@ assert '"drum_children": ("kick", "snare", "toms", "hats")' in qa_source
 assert 'heuristic_stem_confidence_v3' in qa_source
 assert 'confidence_not_fidelity' in qa_source
 assert 'complement_residual' in qa_source
-assert 'research_multi_lead' in source
 assert 'multi_lead_medleyvox' in source
 assert '"multi_lead_children": ("lead_vocals_a", "lead_vocals_b")' in qa_source
 assert 'global_instrument_inventory_v1' in source
@@ -283,10 +278,6 @@ assert 'experimental_pack_only_v1' in source
 assert '_experimental_stems.zip' in source
 assert '_parent_plus_experimental.zip' not in source
 assert 'root_parent_files' not in source
-entry_source = Path('/app/run_flower_duet_research.sh').read_text(encoding='utf-8')
-assert '02%20Lakme_%20Sous%20le%20dome%20Epais%20%28The%20Flower%20Duet%29.mp3' in entry_source
-assert 'research_run_experimental.py' in entry_source
-assert 'http.server 8888' in entry_source
 assert '"drums_5stem_hats" in lower' in source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
@@ -371,5 +362,4 @@ assert health.get('build_sha') == os.environ.get('LITELABS_BUILD_SHA', 'unknown'
 print('LiteLABS serverless boot + build identity smoke test passed')
 PY
 
-ENTRYPOINT ["/app/run_flower_duet_research.sh"]
-CMD []
+CMD ["python", "-u", "/app/handler.py"]
