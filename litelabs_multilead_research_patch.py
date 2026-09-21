@@ -6,32 +6,30 @@ qa_path = Path("/app/qa_research.py")
 exp = exp_path.read_text(encoding="utf-8")
 
 anchor = "        # Mega53 is the routing brain:"
-block = '''        # Research-only multi-singer branch. This never replaces the locked
-        # production lead/backing outputs. It adds Lead Vocals A/B for A/B
-        # listening when explicitly requested by the research payload.
-        if bool(payload.get("research_multi_lead")):
-            try:
-                from multilead_research import run_multilead_research
-                multi_lead_report = run_multilead_research(
-                    stems["vocals"],
-                    experimental,
-                    track,
-                    progress=progress,
-                )
-                vocal_report["multi_lead_research"] = multi_lead_report
-                timings["multi_lead_medleyvox"] = float(multi_lead_report.get("runtime_seconds") or 0.0)
-                vocal_files.extend([
-                    name for name in multi_lead_report.get("files", [])
-                    if name not in vocal_files
-                ])
-            except Exception as exc:
-                vocal_report["multi_lead_research"] = {
-                    "ok": False,
-                    "research_only": True,
-                    "error": str(exc),
-                    "error_type": exc.__class__.__name__,
-                }
-                print(f"LiteLABS research multi-lead separation skipped: {exc}", flush=True)
+block = '''        # Experimental multi-singer branch. Experimental is currently
+        # admin-only at the addon/usergroup layer, so run this path on every
+        # Experimental extraction and keep it fail-open.
+        try:
+            from multilead_research import run_multilead_research
+            multi_lead_report = run_multilead_research(
+                stems["vocals"],
+                experimental,
+                track,
+                progress=progress,
+            )
+            vocal_report["multi_lead"] = multi_lead_report
+            timings["multi_lead_medleyvox"] = float(multi_lead_report.get("runtime_seconds") or 0.0)
+            vocal_files.extend([
+                name for name in multi_lead_report.get("files", [])
+                if name not in vocal_files
+            ])
+        except Exception as exc:
+            vocal_report["multi_lead"] = {
+                "ok": False,
+                "error": str(exc),
+                "error_type": exc.__class__.__name__,
+            }
+            print(f"LiteLABS multi-lead separation skipped: {exc}", flush=True)
 
 '''
 if "multi_lead_medleyvox" not in exp:
@@ -55,42 +53,6 @@ if '"lead_vocals_a" in lower' not in exp:
     if generic not in exp:
         raise RuntimeError("Could not locate vocal QA mapping for multi-lead research")
     exp = exp.replace(generic, replacement, 1)
-
-
-# Research pods are interactive rather than serverless. Copy the finished
-# archive out of the TemporaryDirectory immediately before the final result is
-# returned; this anchor is deliberately independent of the upload implementation.
-if '"local_result_path": str(local_result_path) if local_result_path else None' not in exp:
-    # There can be an earlier timings["total"] inside the 413/result-too-large
-    # return path. We must patch the FINAL success path, otherwise the insertion
-    # de-indents out of the 413 block and leaves its return orphaned.
-    finish_anchor = '        timings["total"] = round(time.monotonic() - started, 3)\n'
-    finish_pos = exp.rfind(finish_anchor)
-    if finish_pos < 0:
-        raise RuntimeError("Could not locate final timing anchor for local research output")
-    local_copy = '''        local_result_path = None
-        research_output_dir = str(payload.get("research_output_dir") or "").strip()
-        if research_output_dir:
-            import shutil
-            output_root = Path(research_output_dir)
-            output_root.mkdir(parents=True, exist_ok=True)
-            local_result_path = output_root / archive.name
-            shutil.copy2(archive, local_result_path)
-
-'''
-    exp = exp[:finish_pos] + local_copy + exp[finish_pos:]
-
-    # Likewise, add the local path only to the FINAL successful result object.
-    result_anchor = '            "uploaded": uploaded,\n'
-    result_pos = exp.rfind(result_anchor)
-    if result_pos < 0:
-        raise RuntimeError("Could not locate final result uploaded field for local research output")
-    result_end = result_pos + len(result_anchor)
-    exp = (
-        exp[:result_end]
-        + '            "local_result_path": str(local_result_path) if local_result_path else None,\n'
-        + exp[result_end:]
-    )
 
 
 exp_path.write_text(exp, encoding="utf-8")
@@ -118,8 +80,7 @@ qa_path.write_text(qa, encoding="utf-8")
 
 check_exp = exp_path.read_text(encoding="utf-8")
 check_qa = qa_path.read_text(encoding="utf-8")
-assert "research_multi_lead" in check_exp
 assert "multi_lead_medleyvox" in check_exp
 assert '"lead_vocals_a" in lower' in check_exp
 assert '"multi_lead_children": ("lead_vocals_a", "lead_vocals_b")' in check_qa
-print("LiteLABS research MedleyVox multi-lead route applied")
+print("LiteLABS Experimental MedleyVox multi-lead route applied")
