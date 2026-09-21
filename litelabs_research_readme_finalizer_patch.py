@@ -28,7 +28,25 @@ clean_block = '''        # public_readme_inventory_final_v1
                 "wind-chimes": "Wind Chimes",
             }
 
-            public_lines = ["DETECTED INSTRUMENTS", "--------------------"]
+            # This is the final README composition point before ZIP packaging.
+            # Remove any earlier/legacy genre lines, then write the canonical
+            # pre-stem G400 result here so it cannot be overwritten later.
+            readme_text = "\n".join(
+                line
+                for line in readme_text.splitlines()
+                if not line.startswith("Detected genre:")
+                and not line.startswith("Genre reason:")
+            )
+
+            detected_genre = str(genre_report.get("genre") or "Unverified")
+            public_lines = [
+                "GENRE",
+                "-----",
+                f"Detected genre: {detected_genre}",
+                "",
+                "DETECTED INSTRUMENTS",
+                "--------------------",
+            ]
             if detected_by_family:
                 for family, names in detected_by_family.items():
                     pretty = [
@@ -47,26 +65,6 @@ clean_block = '''        # public_readme_inventory_final_v1
                 "A detected instrument does not guarantee that an individual specialist stem was exported.",
                 "",
             ])
-
-            if essentia_report.get("ok"):
-                public_lines.extend([
-                    "LITELABS G400 GENRE CANDIDATES",
-                    "-----------------------------",
-                ])
-                for item in (essentia_report.get("genre_top10") or [])[:5]:
-                    public_lines.append(
-                        f"{item.get('label')}: mean {float(item.get('mean', 0.0)):.3f}"
-                    )
-                broad = essentia_report.get("genre_broad_families") or []
-                if broad:
-                    public_lines.append("")
-                    public_lines.append(
-                        "Broad families: " + ", ".join(
-                            f"{item.get('family')} {float(item.get('score', 0.0)):.3f}"
-                            for item in broad[:4]
-                        )
-                    )
-                public_lines.append("")
 
             section = "\\n".join(public_lines)
             included_marker = "INCLUDED STEMS\\n--------------"
@@ -131,6 +129,8 @@ except (IndentationError, SyntaxError) as exc:
     print("----- end generated source context -----", flush=True)
     raise
 assert 'public_readme_inventory_final_v1' in check
-assert 'LITELABS G400 GENRE CANDIDATES' in check
+assert 'Detected genre: {detected_genre}' in check
+assert 'genre_report.get("genre")' in check
+assert 'LITELABS G400 GENRE CANDIDATES' not in check
 assert 'ESSENTIA GENRE CANDIDATES' not in check
 print('LiteLABS final research README composition verified')
