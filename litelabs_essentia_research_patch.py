@@ -127,11 +127,17 @@ if 'essentia_research_second_opinion_v1' not in text:
         research_genre_reason = "LiteLABS G400 evidence unavailable"
         if essentia_report.get("ok") and (essentia_report.get("genre_top10") or []):
             research_genre_item = (essentia_report.get("genre_top10") or [])[0]
-            research_genre = str(
+            raw_genre_label = str(
                 research_genre_item.get("label") or "mixed_or_unknown"
-            ).replace("---", " / ").replace("_", " ")
+            )
+            research_genre = (
+                raw_genre_label.split("---", 1)[-1]
+                .replace("_", " ")
+                .strip()
+            )
             research_genre_reason = (
                 "LiteLABS G400 top classification "
+                f"{raw_genre_label} "
                 f"(mean {float(research_genre_item.get('mean', 0.0)):.3f}, "
                 f"p90 {float(research_genre_item.get('p90', 0.0)):.3f})"
             )
