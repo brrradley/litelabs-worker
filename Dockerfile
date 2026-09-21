@@ -116,15 +116,36 @@ assets = {
     "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json":
         Path("/models/essentia/genre_discogs400-discogs-effnet-1.json"),
 }
+import time
+
+def download(url: str, path: Path, attempts: int = 5) -> None:
+    tmp = path.with_suffix(path.suffix + ".part")
+    for attempt in range(1, attempts + 1):
+        try:
+            tmp.unlink(missing_ok=True)
+            with requests.get(url, stream=True, timeout=(90, 1800)) as response:
+                response.raise_for_status()
+                with tmp.open("wb") as handle:
+                    for chunk in response.iter_content(4 * 1024 * 1024):
+                        if chunk:
+                            handle.write(chunk)
+            if tmp.stat().st_size <= 0:
+                raise RuntimeError(f"Empty Essentia asset: {path}")
+            tmp.replace(path)
+            return
+        except Exception as exc:
+            tmp.unlink(missing_ok=True)
+            if attempt >= attempts:
+                raise
+            wait = min(60, 2 ** attempt)
+            print(
+                f"Essentia download attempt {attempt}/{attempts} failed for {path.name}: {exc}; retrying in {wait}s",
+                flush=True,
+            )
+            time.sleep(wait)
+
 for url, path in assets.items():
-    with requests.get(url, stream=True, timeout=(30, 1800)) as response:
-        response.raise_for_status()
-        with path.open("wb") as handle:
-            for chunk in response.iter_content(4 * 1024 * 1024):
-                if chunk:
-                    handle.write(chunk)
-    if path.stat().st_size <= 0:
-        raise RuntimeError(f"Empty Essentia asset: {path}")
+    download(url, path)
 print("Research Essentia models downloaded")
 PY
 RUN python - <<'PY'
