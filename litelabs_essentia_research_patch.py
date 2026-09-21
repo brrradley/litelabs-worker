@@ -143,9 +143,9 @@ if 'ESSENTIA GENRE CANDIDATES' not in text:
     text = text.replace(marker, addition + marker, 1)
 
     end_marker = '            section = "\\n".join(lines)\n'
-    replacement = '''            section = "\n".join(lines)
+    replacement = '''            section = "\\n".join(lines)
             if genre_lines:
-                section += "\n" + "\n".join(genre_lines)
+                section += "\\n" + "\\n".join(genre_lines)
 '''
     if end_marker not in text:
         raise RuntimeError('Could not locate README inventory section join')
