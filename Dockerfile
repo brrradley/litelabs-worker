@@ -240,9 +240,10 @@ assert '0.75 * np.asarray(alt_vocals_audio' in source
 assert 'mel_band_roformer_vocals_becruily.ckpt' in source
 assert source.count('mel_band_roformer_karaoke_becruily.ckpt') >= 2
 assert 'best_backing = fast_parent - fast_lead' in source
-assert 'def _vx_find_output(directory, role)' in source
-assert 'secondary/Instrumental' in source
+# The karaoke secondary output is discovered by role, not trusted by its
+# human-readable filename. Guard the actual lookup path rather than stale prose.
 assert source.count('"secondary"') >= 2
+assert 'def _vx_find_output(directory, role)' in source
 assert 'best_stems_share_single_parent_pair' in source
 assert 'suppressed_as_gain_scaled_duplicate' in source
 assert 'gain_scaled_duplicate_of_lead' in source
