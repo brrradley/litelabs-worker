@@ -246,6 +246,7 @@ assert source.count('"secondary"') >= 2
 assert 'best_stems_share_single_parent_pair' in source
 assert 'suppressed_as_gain_scaled_duplicate' in source
 assert 'gain_scaled_duplicate_of_lead' in source
+assert 'public_role_correction' in source
 assert '"backing_detected": bool(duplicate_analysis["backing_detected"])' in source
 
 # HH and cymbals remain one DrumSep inference but are merged before encoding.
@@ -271,6 +272,7 @@ assert 'heuristic_stem_confidence_v3' in qa_source
 assert 'confidence_not_fidelity' in qa_source
 assert 'complement_residual' in qa_source
 assert 'multi_lead_medleyvox' in source
+assert 'no_multi_lead_evidence' in source
 assert '"multi_lead_children": ("lead_vocals_a", "lead_vocals_b")' in qa_source
 assert 'global_instrument_inventory_v1' in source
 assert 'global_inventory_reused_for_family_router' in source
@@ -288,7 +290,12 @@ assert 'torch.autocast' not in multilead_source
 assert 'LITELABS G400 GENRE CANDIDATES' in source
 assert 'ESSENTIA GENRE CANDIDATES' not in source
 assert 'public_readme_inventory_final_v1' in source
-assert 'experimental_pack_only_v1' in source
+assert 'experimental_pack_only_v2' in source
+assert 'curated_experimental_only_v2' in source
+assert 'pack_folder_name' in source
+assert 'dead_or_near_silent' in source
+assert '"drums_5stem_kick": "kick"' in source
+assert '"wind_brass_family": "wind"' in source
 assert '_experimental_stems.zip' in source
 assert '_parent_plus_experimental.zip' not in source
 assert 'root_parent_files' not in source
