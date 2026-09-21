@@ -342,6 +342,8 @@ assert 'public_detected_by_family' in source
 assert 'research_genre' in source
 assert '"detected_instruments": sorted(detected_instruments)' in source
 assert '"detected_by_family": detected_by_family' in source
+assert source.index('research_genre = str(genre or "mixed_or_unknown")') < source.index('global_inventory_report = {')
+assert source.index('essentia_report = {') < source.index('global_inventory_report = {')
 assert 'dead_or_near_silent' in source
 assert '"drums_5stem_kick": "kick"' in source
 assert '"wind_brass_family": "wind"' in source
