@@ -35,6 +35,7 @@ if 'essentia_research_second_opinion_v1' not in text:
             essentia_report = run_essentia_research(
                 global_inventory_in / "instrumental.flac",
                 genre_sample_path,
+                progress=progress,
             )
         except Exception as exc:
             essentia_report = {
