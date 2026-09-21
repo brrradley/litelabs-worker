@@ -189,21 +189,10 @@ packaging = '''        # experimental_pack_only_v3
             if found:
                 public_detected_by_family[family] = found
 
-        g400_items = []
-        broad_families = []
-        public_genre = "unverified"
-        public_genre_reason = "LiteLABS G400 evidence unavailable; heuristic genre kept internal only"
-        if essentia_report.get("ok"):
-            g400_items = list(essentia_report.get("genre_top10") or [])
-            broad_families = list(essentia_report.get("genre_broad_families") or [])
-            if g400_items:
-                top_genre = g400_items[0]
-                public_genre = str(top_genre.get("label") or "unverified").replace("---", " / ").replace("_", " ")
-                public_genre_reason = (
-                    "LiteLABS G400 top classification "
-                    f"(mean {float(top_genre.get('mean', 0.0)):.3f}, "
-                    f"p90 {float(top_genre.get('p90', 0.0)):.3f})"
-                )
+        g400_items = list(essentia_report.get("genre_top10") or [])
+        broad_families = list(essentia_report.get("genre_broad_families") or [])
+        public_genre = str(research_genre or "unverified")
+        public_genre_reason = str(research_genre_reason or "")
 
         readme_source = final / "README.txt"
         if readme_source.is_file():
@@ -354,6 +343,11 @@ packaging = '''        # experimental_pack_only_v3
             encoding="utf-8",
         )
 
+        report["detected_genre"] = public_genre
+        report["genre_reason"] = public_genre_reason
+        report["detected_instruments"] = sorted(detected_instruments)
+        report["detected_by_family"] = public_detected_by_family
+        report["genre_top10"] = g400_items[:10]
         report["packaging"] = {
             "policy": "curated_experimental_only_v3",
             "archive_layout": "flat",
@@ -392,6 +386,15 @@ text = text.replace(
     '"experimental_files": sorted(p.name for p in experimental.iterdir() if p.is_file()),',
     '"experimental_files": sorted(exported_files),',
 )
+text = text.replace(
+    '            "report": report,\n',
+    '            "detected_genre": research_genre,\n'
+    '            "genre_reason": research_genre_reason,\n'
+    '            "detected_instruments": sorted(detected_instruments),\n'
+    '            "detected_by_family": detected_by_family,\n'
+    '            "genre_top10": list(essentia_report.get("genre_top10") or [])[:10],\n'
+    '            "report": report,\n',
+)
 
 path.write_text(text, encoding='utf-8')
 
@@ -404,6 +407,8 @@ assert 'drums_5stem_kick": "kick"' in check
 assert 'wind_brass_family": "wind"' in check
 assert 'technical_residual' in check
 assert 'dead_or_near_silent' in check
+assert '"detected_genre": research_genre' in check
+assert '"detected_instruments": sorted(detected_instruments)' in check
 assert '_parent_plus_experimental.zip' not in check
 assert '_experimental_stems.zip' in check
 print('LiteLABS curated Experimental-only flat pack policy v3 applied')
