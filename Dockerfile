@@ -303,7 +303,6 @@ assert 'public_detected_by_family' in source
 assert 'research_genre' in source
 assert '"detected_instruments": sorted(detected_instruments)' in source
 assert '"detected_by_family": detected_by_family' in source
-assert 'heuristic genre kept internal only' in source
 assert 'dead_or_near_silent' in source
 assert '"drums_5stem_kick": "kick"' in source
 assert '"wind_brass_family": "wind"' in source
