@@ -77,6 +77,17 @@ if 'essentia_research_second_opinion_v1' not in text:
             if name not in detected_instruments:
                 detected_instruments.append(name)
 
+        # Rebuild the public family inventory after second-opinion evidence is
+        # merged. The earlier family snapshot only contains the primary detector
+        # and can otherwise leave README/report instrumentation stale or empty.
+        detected_by_family = {}
+        for family, members in family_map.items():
+            if family == "Vocals":
+                continue
+            found = sorted({name for name in detected_instruments if name in members})
+            if found:
+                detected_by_family[family] = found
+
         # Family routing can be boosted by Essentia, but expensive individual
         # specialists still require the existing Mega53/specialist evidence.
         essentia_brass = bool(
