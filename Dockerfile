@@ -19,7 +19,9 @@ COPY litelabs_vocal_duplicate_guard_patch.py /app/litelabs_vocal_duplicate_guard
 COPY multilead_research.py /app/multilead_research.py
 COPY essentia_research.py /app/essentia_research.py
 COPY genre_probe.py /app/genre_probe.py
+COPY instrument_probe.py /app/instrument_probe.py
 COPY litelabs_genre_probe_handler_patch.py /app/litelabs_genre_probe_handler_patch.py
+COPY litelabs_instrument_probe_handler_patch.py /app/litelabs_instrument_probe_handler_patch.py
 COPY litelabs_multilead_research_patch.py /app/litelabs_multilead_research_patch.py
 COPY litelabs_instrument_inventory_research_patch.py /app/litelabs_instrument_inventory_research_patch.py
 COPY litelabs_essentia_research_patch.py /app/litelabs_essentia_research_patch.py
@@ -106,10 +108,12 @@ PY
 # depend on essentia.upf.edu availability.
 COPY --from=genre_model_assets /models/essentia /models/essentia
 RUN python -m pip install --no-cache-dir --pre essentia-tensorflow \
-    && python -m py_compile /app/genre_probe.py \
+    && python -m py_compile /app/genre_probe.py /app/instrument_probe.py \
     && test -s /models/essentia/discogs-effnet-bs64-1.pb \
     && test -s /models/essentia/genre_discogs400-discogs-effnet-1.pb \
-    && test -s /models/essentia/genre_discogs400-discogs-effnet-1.json
+    && test -s /models/essentia/genre_discogs400-discogs-effnet-1.json \
+    && test -s /models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb \
+    && test -s /models/essentia/mtg_jamendo_instrument-discogs-effnet-1.json
 
 # Exercise the exact RunPod genre path during the image build. This is real
 # inference, not an import/constructor-only smoke test.
@@ -155,6 +159,56 @@ assert result["mode"] == "genre_probe"
 assert len(result["top10"]) == 10
 assert result["embedding_frames"] > 0
 print("G400 genre probe inference smoke test passed:", result["genre"])
+PY
+
+# Exercise the exact isolated instrument detector too. The classifier is
+# intentionally constructed without hard-coded TensorFlow endpoints.
+RUN CUDA_VISIBLE_DEVICES=-1 TF_CPP_MIN_LOG_LEVEL=2 python - <<'PY'
+import json
+import subprocess
+from pathlib import Path
+
+import numpy as np
+import soundfile as sf
+
+audio = Path("/tmp/instrument-smoke.wav")
+sr = 16000
+t = np.arange(sr * 4, dtype=np.float32) / sr
+signal = (
+    0.08 * np.sin(2 * np.pi * 110 * t)
+    + 0.04 * np.sin(2 * np.pi * 440 * t)
+).astype(np.float32)
+sf.write(audio, signal, sr, subtype="FLOAT")
+
+completed = subprocess.run(
+    ["python", "-u", "/app/instrument_probe.py", str(audio)],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    env={
+        **__import__("os").environ,
+        "CUDA_VISIBLE_DEVICES": "-1",
+        "TF_CPP_MIN_LOG_LEVEL": "2",
+    },
+    timeout=120,
+    check=False,
+)
+if completed.returncode != 0:
+    raise RuntimeError(
+        "Inst-MTG smoke inference failed:\n"
+        + (completed.stderr or completed.stdout or "")[-5000:]
+    )
+lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+result = json.loads(lines[-1])
+assert result["ok"] is True
+assert result["mode"] == "instrument_probe"
+assert result["class_count"] >= 20
+assert len(result["top10"]) == 10
+assert result["embedding_frames"] > 0
+print(
+    "Inst-MTG instrument probe inference smoke test passed:",
+    [item["label"] for item in result["top10"][:3]],
+)
 PY
 
 # Experimental MedleyVox duet/co-lead separator. The model runs at 24 kHz and
@@ -210,8 +264,9 @@ RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_research_readme_finalizer_patch.py \
     && python /app/litelabs_experimental_pack_only_patch.py \
     && python /app/litelabs_genre_probe_handler_patch.py \
+    && python /app/litelabs_instrument_probe_handler_patch.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_experimental_pack_only_patch.py /app/litelabs_genre_probe_handler_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_experimental_pack_only_patch.py /app/litelabs_genre_probe_handler_patch.py /app/litelabs_instrument_probe_handler_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -291,6 +346,7 @@ assert 'root_parent_files' not in source
 assert '"drums_5stem_hats" in lower' in source
 assert 'experimental_children_v1' in handler_source
 assert 'genre_probe_handler_v1' in handler_source
+assert 'instrument_probe_handler_v1' in handler_source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
 
@@ -404,7 +460,25 @@ assert probe.get('mode') == 'genre_probe', probe
 assert probe.get('model') == 'G400', probe
 assert len(probe.get('top10') or []) == 10, probe
 
-print('LiteLABS serverless boot + genre_probe route smoke test passed:', probe.get('genre'))
+instrument_probe = handler({
+    'input': {
+        'mode': 'instrument_probe',
+        'audio_path': str(audio),
+        'filename': audio.name,
+        'instrument_timeout_seconds': 120,
+    }
+})
+assert instrument_probe.get('ok') is True, instrument_probe
+assert instrument_probe.get('mode') == 'instrument_probe', instrument_probe
+assert instrument_probe.get('model') == 'Inst-MTG', instrument_probe
+assert len(instrument_probe.get('top10') or []) == 10, instrument_probe
+assert instrument_probe.get('class_count', 0) >= 20, instrument_probe
+
+print(
+    'LiteLABS serverless boot + isolated probe routes passed:',
+    probe.get('genre'),
+    [item.get('label') for item in instrument_probe.get('top10', [])[:3]],
+)
 PY
 
 CMD ["python", "-u", "/app/handler.py"]
