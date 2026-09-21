@@ -25,8 +25,9 @@ old = '''        lead_n = min(len(quality_lead), blend_n)
             "benchmark_id": "vocal_benchmark_v1",
             "files": vocal_files,
             "parent_recipe": "BS-RoFormer-SW vocals",
-            "lead_recipe": "25% SW + 75% MelBand Becruily vocal parent -> Becruily karaoke secondary/Instrumental",
-            "backing_recipe": "SW vocals - fast SW->Becruily karaoke secondary/Instrumental",
+            "lead_recipe": "corrected public role: SW vocals - fast SW->Becruily karaoke secondary/Instrumental",
+            "backing_recipe": "corrected public role: 25% SW + 75% MelBand Becruily vocal parent -> Becruily karaoke secondary/Instrumental",
+            "public_role_correction": "live_validation_swap_v1",
             "best_stems_share_single_parent_pair": False,
             "fast_backing_route_parent_reconstruction_cosine": round(float(_cos(fast_parent, fast_rebuilt)), 9),
             "fast_backing_route_residual_relative_to_parent_db": _db(fast_residual_rms / max(fast_parent_rms, 1e-12)),
@@ -125,14 +126,19 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
                 "suppressed_as_gain_scaled_duplicate": suppress,
             }
 
-        duplicate_analysis = _vx_scaled_duplicate_analysis(best_lead, best_backing, vocal_sr)
+        # Live Experimental validation showed the two public vocal labels were
+        # reversed relative to what users hear. Keep the benchmark routes intact
+        # internally, but export them under the corrected public roles.
+        public_lead = best_backing
+        public_backing = best_lead
+        duplicate_analysis = _vx_scaled_duplicate_analysis(public_lead, public_backing, vocal_sr)
 
         lead_dest = experimental / f"{track}_lead_vocals.flac"
         backing_dest = experimental / f"{track}_backing_vocals.flac"
-        _write_flac(lead_dest, best_lead, vocal_sr)
+        _write_flac(lead_dest, public_lead, vocal_sr)
         vocal_files = [lead_dest.name]
         if duplicate_analysis["backing_detected"]:
-            _write_flac(backing_dest, best_backing, vocal_sr)
+            _write_flac(backing_dest, public_backing, vocal_sr)
             vocal_files.append(backing_dest.name)
 
         fast_rebuilt = fast_lead + best_backing
