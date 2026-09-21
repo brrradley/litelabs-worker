@@ -147,25 +147,19 @@ for url, path in assets.items():
 print("Research Essentia models downloaded")
 PY
 RUN python - <<'PY'
-from essentia.standard import TensorflowPredict2D, TensorflowPredictEffnetDiscogs
+from pathlib import Path
+from essentia.standard import TensorflowPredictEffnetDiscogs
+from essentia_research import _make_classifier
 
-# Validate the exact frozen-graph endpoints used by the Experimental
-# second-opinion classifiers during the image build.
+# Validate the exact runtime loader against the classifier files baked into
+# this image. The loader supports both graph layouts observed in production.
 TensorflowPredictEffnetDiscogs(
     graphFilename="/models/essentia/discogs-effnet-bs64-1.pb",
     output="PartitionedCall:1",
 )
-TensorflowPredict2D(
-    graphFilename="/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb",
-    input="model/Placeholder",
-    output="model/Sigmoid",
-)
-TensorflowPredict2D(
-    graphFilename="/models/essentia/genre_discogs400-discogs-effnet-1.pb",
-    input="model/Placeholder",
-    output="model/Sigmoid",
-)
-print("Essentia TensorFlow graph endpoint smoke test passed")
+_make_classifier(Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb"))
+_make_classifier(Path("/models/essentia/genre_discogs400-discogs-effnet-1.pb"))
+print("Essentia TensorFlow classifier loader smoke test passed")
 PY
 
 # Experimental MedleyVox duet/co-lead separator. The model runs at 24 kHz and
@@ -283,9 +277,11 @@ assert 'global_inventory_reused_for_family_router' in source
 assert 'DETECTED INSTRUMENTS' in source
 assert 'essentia_research_second_opinion_v1' in source
 essentia_source = Path('/app/essentia_research.py').read_text(encoding='utf-8')
+assert '_make_classifier' in essentia_source
+assert 'serving_default_model_Placeholder' in essentia_source
+assert 'PartitionedCall' in essentia_source
 assert 'model/Placeholder' in essentia_source
 assert 'model/Sigmoid' in essentia_source
-assert 'serving_default_model_Placeholder' not in essentia_source
 multilead_source = Path('/app/multilead_research.py').read_text(encoding='utf-8')
 assert 'model.float()' in multilead_source
 assert 'torch.autocast' not in multilead_source
