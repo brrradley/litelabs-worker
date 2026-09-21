@@ -8,9 +8,8 @@ ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 
 WORKDIR /app
 
-# Use the repository handler rather than the inherited base-image handler.
-COPY handler.py /app/handler.py
-
+# Preserve the known-good production handler inherited from the base image.
+# Only inject the isolated genre_probe request route below.
 # Start QA from the repository's known v2 source instead of the already-patched
 # copy inherited from the base image. This makes the learning hotfix deterministic.
 COPY qa_research.py /app/qa_research.py
@@ -20,6 +19,7 @@ COPY litelabs_vocal_duplicate_guard_patch.py /app/litelabs_vocal_duplicate_guard
 COPY multilead_research.py /app/multilead_research.py
 COPY essentia_research.py /app/essentia_research.py
 COPY genre_probe.py /app/genre_probe.py
+COPY litelabs_genre_probe_handler_patch.py /app/litelabs_genre_probe_handler_patch.py
 COPY litelabs_multilead_research_patch.py /app/litelabs_multilead_research_patch.py
 COPY litelabs_instrument_inventory_research_patch.py /app/litelabs_instrument_inventory_research_patch.py
 COPY litelabs_essentia_research_patch.py /app/litelabs_essentia_research_patch.py
@@ -209,8 +209,9 @@ RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_public_readme_model_redaction_patch.py \
     && python /app/litelabs_research_readme_finalizer_patch.py \
     && python /app/litelabs_experimental_pack_only_patch.py \
+    && python /app/litelabs_genre_probe_handler_patch.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_experimental_pack_only_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_experimental_pack_only_patch.py /app/litelabs_genre_probe_handler_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -288,6 +289,8 @@ assert '_experimental_stems.zip' in source
 assert '_parent_plus_experimental.zip' not in source
 assert 'root_parent_files' not in source
 assert '"drums_5stem_hats" in lower' in source
+assert 'experimental_children_v1' in handler_source
+assert 'genre_probe_handler_v1' in handler_source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
 
