@@ -41,7 +41,7 @@ def _classify_confidence(item: dict[str, float]) -> str:
     return "weak"
 
 
-def run_essentia_research(instrument_audio: Path, genre_audio: Path) -> dict:
+def run_essentia_research(instrument_audio: Path, genre_audio: Path, progress=None) -> dict:
     from essentia.standard import (
         MonoLoader,
         TensorflowPredict2D,
@@ -59,6 +59,9 @@ def run_essentia_research(instrument_audio: Path, genre_audio: Path) -> dict:
     )
     instrument_model = TensorflowPredict2D(graphFilename=str(INSTRUMENT_HEAD))
     genre_model = TensorflowPredict2D(graphFilename=str(GENRE_HEAD))
+
+    if progress:
+        progress("LiteLABS Inst-MTG", 41)
 
     instrument_signal = MonoLoader(
         filename=str(instrument_audio),
@@ -80,6 +83,9 @@ def run_essentia_research(instrument_audio: Path, genre_audio: Path) -> dict:
         confidence = _classify_confidence(item)
         if confidence != "weak":
             detected[name] = {**item, "confidence": confidence}
+
+    if progress:
+        progress("LiteLABS G400", 43)
 
     genre_embeddings = embedder(genre_signal)
     genre_predictions = genre_model(genre_embeddings)
