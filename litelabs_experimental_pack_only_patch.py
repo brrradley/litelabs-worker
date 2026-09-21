@@ -11,6 +11,18 @@ text = text.replace(
     1,
 )
 
+# Defensive compatibility with older addons that passed the internal
+# <track>-<16hex job key> as payload.filename.
+old_track = '        track = _safe_name(Path(str(payload.get("filename") or raw_name)).stem)\n'
+new_track = '''        track = _safe_name(Path(str(payload.get("filename") or raw_name)).stem)
+        if len(track) > 17 and track[-17] == "-" and all(
+            ch in "0123456789abcdefABCDEF" for ch in track[-16:]
+        ):
+            track = track[:-17]
+'''
+if old_track in text:
+    text = text.replace(old_track, new_track, 1)
+
 # Research download packs are for experimental outputs only. RoFormer parent
 # stems remain available internally for routing, QA and child reconstruction,
 # but they are not duplicated into the downloadable ZIP.
@@ -91,4 +103,5 @@ assert '_experimental_stems.zip' in check
 assert 'Packaging Experimental Stems' in check
 assert 'root_parent_files' not in check
 assert 'experimental = final / "experimental"' not in check
+assert 'track = track[:-17]' in check
 print('LiteLABS research experimental-only pack policy applied')
