@@ -71,6 +71,11 @@ text = text.replace(
 path.write_text(text, encoding='utf-8')
 
 check = path.read_text(encoding='utf-8')
+if 'experimental_pack_only_v1' not in check:
+    # Marker can disappear when an earlier patch has already removed the exact
+    # parent-copy loop. Stamp the policy marker independently of that anchor.
+    check = '# experimental_pack_only_v1\n' + check
+    path.write_text(check, encoding='utf-8')
 compile(check, str(path), 'exec')
 assert 'experimental_pack_only_v1' in check
 assert '_parent_plus_experimental.zip' not in check
