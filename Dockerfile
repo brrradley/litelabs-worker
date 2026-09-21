@@ -1,3 +1,7 @@
+# Reuse the already-verified Essentia model bundle from the last deployed image.
+# This removes essentia.upf.edu from normal production builds entirely.
+FROM ghcr.io/brrradley/litelabs-worker:79b4c30943c0d799527b0f16b136a17f40c75d13 AS essentia_model_assets
+
 FROM ghcr.io/brrradley/litelabs-worker:f6d1cbbff61f1c6ce9cf8d2001c2b9f2819db2c4
 
 ARG LITELABS_BUILD_SHA=unknown
@@ -96,108 +100,96 @@ print('Locked Becruily vocal benchmark models baked and verified')
 PY
 
 # Experimental Essentia second-opinion detector.
-RUN python -m pip install --no-cache-dir --pre essentia-tensorflow \
-    && mkdir -p /models/essentia \
+# Model files are copied from a pinned GHCR image that already passed production
+# build verification. Runtime jobs never download these assets.
+COPY --from=essentia_model_assets /models/essentia /models/essentia
+
+RUN python -m pip install --no-cache-dir "essentia-tensorflow==2.1b6.dev1389" \
     && python - <<'PY'
 from pathlib import Path
-import requests
-
-assets = {
-    Path("/models/essentia/discogs-effnet-bs64-1.pb"): [
-        "https://essentia.upf.edu/models/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb",
-        "https://huggingface.co/spaces/omgitsqing/hum_me_a_melody/resolve/main/tf_graph_files/discogs-effnet-bs64-1.pb?download=true",
-    ],
-    Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb"): [
-        "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb",
-        "http://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb",
-    ],
-    Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.json"): [
-        "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.json",
-        "http://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.json",
-    ],
-    Path("/models/essentia/genre_discogs400-discogs-effnet-1.pb"): [
-        "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb",
-        "http://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb",
-    ],
-    Path("/models/essentia/genre_discogs400-discogs-effnet-1.json"): [
-        "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json",
-        "http://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json",
-    ],
-}
-
 import hashlib
-import time
+import json
 
-expected_sha256 = {
+root = Path("/models/essentia")
+expected = {
+    "discogs-effnet-bs64-1.pb": 18366619,
+    "mtg_jamendo_instrument-discogs-effnet-1.pb": 2706836,
+    "mtg_jamendo_instrument-discogs-effnet-1.json": 3382,
+    "genre_discogs400-discogs-effnet-1.pb": 2057977,
+    "genre_discogs400-discogs-effnet-1.json": 14951,
+}
+for name, size in expected.items():
+    path = root / name
+    if not path.is_file():
+        raise RuntimeError(f"Missing baked Essentia asset: {name}")
+    actual = path.stat().st_size
+    if actual != size:
+        raise RuntimeError(f"Unexpected Essentia asset size for {name}: {actual} != {size}")
+
+known_hashes = {
     "discogs-effnet-bs64-1.pb": "3ed9af50d5367c0b9c795b294b00e7599e4943244f4cbd376869f3bfc87721b1",
     "mtg_jamendo_instrument-discogs-effnet-1.pb": "2e8c3003c722e098da371b6a1f7ad0ce62fac0dcfc09c7c7997d430941196c2a",
 }
+for name, expected_hash in known_hashes.items():
+    digest = hashlib.sha256((root / name).read_bytes()).hexdigest()
+    if digest != expected_hash:
+        raise RuntimeError(f"Essentia SHA256 mismatch for {name}: {digest}")
 
-def download(urls: list[str], path: Path, attempts_per_url: int = 2) -> None:
-    tmp = path.with_suffix(path.suffix + ".part")
-    errors = []
-    for url in urls:
-        for attempt in range(1, attempts_per_url + 1):
-            try:
-                tmp.unlink(missing_ok=True)
-                with requests.get(
-                    url,
-                    stream=True,
-                    timeout=(20, 1800),
-                    allow_redirects=True,
-                ) as response:
-                    response.raise_for_status()
-                    with tmp.open("wb") as handle:
-                        for chunk in response.iter_content(4 * 1024 * 1024):
-                            if chunk:
-                                handle.write(chunk)
-                if tmp.stat().st_size <= 0:
-                    raise RuntimeError(f"Empty Essentia asset: {path}")
-
-                expected = expected_sha256.get(path.name)
-                if expected:
-                    digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
-                    if digest != expected:
-                        raise RuntimeError(
-                            f"SHA256 mismatch for {path.name}: {digest}"
-                        )
-
-                tmp.replace(path)
-                print(
-                    f"Essentia asset ready: {path.name} via {url.split('/')[2]}",
-                    flush=True,
-                )
-                return
-            except Exception as exc:
-                tmp.unlink(missing_ok=True)
-                errors.append(f"{url} attempt {attempt}: {exc}")
-                if attempt < attempts_per_url:
-                    time.sleep(2 ** attempt)
-
-    raise RuntimeError(
-        f"Unable to download Essentia asset {path.name}: "
-        + " | ".join(errors)
-    )
-
-for path, urls in assets.items():
-    download(urls, path)
-print("Research Essentia models downloaded")
+instrument_meta = json.loads((root / "mtg_jamendo_instrument-discogs-effnet-1.json").read_text())
+genre_meta = json.loads((root / "genre_discogs400-discogs-effnet-1.json").read_text())
+assert len(instrument_meta["classes"]) >= 40
+assert len(genre_meta["classes"]) == 400
+print("Pinned local Essentia model bundle verified")
 PY
-RUN python - <<'PY'
+
+RUN CUDA_VISIBLE_DEVICES=-1 TF_CPP_MIN_LOG_LEVEL=2 python - <<'PY'
 from pathlib import Path
+import json
+import numpy as np
 from essentia.standard import TensorflowPredictEffnetDiscogs
 from essentia_research import _make_classifier
 
-# Validate the exact runtime loader against the classifier files baked into
-# this image. Endpoint names are inspected first; invalid native constructors
-# must never be tried speculatively.
-TensorflowPredictEffnetDiscogs(
-    graphFilename="/models/essentia/discogs-effnet-bs64-1.pb",
+root = Path("/models/essentia")
+embedder = TensorflowPredictEffnetDiscogs(
+    graphFilename=str(root / "discogs-effnet-bs64-1.pb"),
     output="PartitionedCall:1",
 )
-_make_classifier(Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb"))
-_make_classifier(Path("/models/essentia/genre_discogs400-discogs-effnet-1.pb"))
-print("Essentia TensorFlow classifier loader smoke test passed")
+instrument_model = _make_classifier(
+    root / "mtg_jamendo_instrument-discogs-effnet-1.pb"
+)
+genre_model = _make_classifier(
+    root / "genre_discogs400-discogs-effnet-1.pb"
+)
+
+# Constructor-only tests missed the production failure. Run real inference over
+# a short deterministic signal so graph creation and prediction are both tested.
+signal = np.zeros(16000 * 4, dtype=np.float32)
+embeddings = np.asarray(embedder(signal), dtype=np.float32)
+if embeddings.ndim != 2 or embeddings.shape[0] == 0:
+    raise RuntimeError(f"Invalid EffNet embeddings shape: {embeddings.shape}")
+
+instrument_predictions = np.asarray(instrument_model(embeddings))
+genre_predictions = np.asarray(genre_model(embeddings))
+instrument_classes = json.loads(
+    (root / "mtg_jamendo_instrument-discogs-effnet-1.json").read_text()
+)["classes"]
+genre_classes = json.loads(
+    (root / "genre_discogs400-discogs-effnet-1.json").read_text()
+)["classes"]
+if instrument_predictions.shape[-1] != len(instrument_classes):
+    raise RuntimeError(
+        f"Instrument prediction mismatch: {instrument_predictions.shape} vs {len(instrument_classes)}"
+    )
+if genre_predictions.shape[-1] != len(genre_classes):
+    raise RuntimeError(
+        f"Genre prediction mismatch: {genre_predictions.shape} vs {len(genre_classes)}"
+    )
+print(
+    "Essentia inference smoke test passed:",
+    embeddings.shape,
+    instrument_predictions.shape,
+    genre_predictions.shape,
+)
 PY
 
 # Experimental MedleyVox duet/co-lead separator. The model runs at 24 kHz and
