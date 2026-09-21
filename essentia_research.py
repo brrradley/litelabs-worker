@@ -30,6 +30,31 @@ def _aggregate(predictions: np.ndarray, classes: list[str]) -> dict[str, dict[st
     return result
 
 
+def _make_classifier(graph_filename: Path):
+    from essentia.standard import TensorflowPredict2D
+
+    candidates = (
+        ("serving_default_model_Placeholder", "PartitionedCall"),
+        ("serving_default_model_Placeholder", "PartitionedCall:0"),
+        ("model/Placeholder", "model/Sigmoid"),
+    )
+    errors = []
+    for input_name, output_name in candidates:
+        try:
+            return TensorflowPredict2D(
+                graphFilename=str(graph_filename),
+                input=input_name,
+                output=output_name,
+            )
+        except RuntimeError as exc:
+            errors.append(f"{input_name} -> {output_name}: {exc}")
+
+    raise RuntimeError(
+        "Could not configure Essentia classifier graph with any supported "
+        "endpoint layout:\n" + "\n".join(errors)
+    )
+
+
 def _classify_confidence(item: dict[str, float]) -> str:
     mean = float(item.get("mean", 0.0))
     p90 = float(item.get("p90", 0.0))
@@ -44,7 +69,6 @@ def _classify_confidence(item: dict[str, float]) -> str:
 def run_essentia_research(instrument_audio: Path, genre_audio: Path, progress=None) -> dict:
     from essentia.standard import (
         MonoLoader,
-        TensorflowPredict2D,
         TensorflowPredictEffnetDiscogs,
     )
 
@@ -58,19 +82,11 @@ def run_essentia_research(instrument_audio: Path, genre_audio: Path, progress=No
         output="PartitionedCall:1",
     )
 
-    # These frozen classifier heads expose the legacy graph node names below.
-    # Keep them explicit so TensorflowPredict2D does not guess SavedModel-style
-    # serving names that are not present in the packaged .pb graphs.
-    instrument_model = TensorflowPredict2D(
-        graphFilename=str(INSTRUMENT_HEAD),
-        input="model/Placeholder",
-        output="model/Sigmoid",
-    )
-    genre_model = TensorflowPredict2D(
-        graphFilename=str(GENRE_HEAD),
-        input="model/Placeholder",
-        output="model/Sigmoid",
-    )
+    # Essentia has shipped both SavedModel-wrapped and legacy frozen classifier
+    # heads under these model names. Resolve either known graph layout at
+    # runtime instead of pinning the pipeline to one wrapper representation.
+    instrument_model = _make_classifier(INSTRUMENT_HEAD)
+    genre_model = _make_classifier(GENRE_HEAD)
 
     if progress:
         progress("LiteLABS Inst-MTG", 41)
