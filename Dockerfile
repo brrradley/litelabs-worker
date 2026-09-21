@@ -326,16 +326,21 @@ assert '"multi_lead_children": ("lead_vocals_a", "lead_vocals_b")' in qa_source
 assert 'global_instrument_inventory_v1' in source
 assert 'global_inventory_reused_for_family_router' in source
 assert 'DETECTED INSTRUMENTS' in source
-assert 'genre_probe_pre_stem_v1' in source
-assert 'genre_probe_complete_before_stems_v1' in source
+assert 'validated_analysis_pre_stem_v2' in source
+assert 'validated_analysis_complete_before_stems_v2' in source
 assert '["python", "-u", "/app/genre_probe.py", str(downloaded)]' in source
-assert source.index('genre_probe_complete_before_stems_v1') < source.index('rc, elapsed = _run_polled(')
+assert '["python", "-u", "/app/instrument_probe.py", str(downloaded)]' in source
+assert source.index('validated_analysis_complete_before_stems_v2') < source.index('rc, elapsed = _run_polled(')
 assert '"genre_analysis": genre_report' in source
+assert '"instrument_analysis": instrument_report' in source
 multilead_source = Path('/app/multilead_research.py').read_text(encoding='utf-8')
 assert 'model.float()' in multilead_source
 assert 'torch.autocast' not in multilead_source
 assert 'Detected genre: {detected_genre}' in source
 assert 'genre_report.get("genre")' in source
+assert 'instrument_report.get("detected_instruments")' in source
+assert '"electricguitar": "Electric Guitar"' in source
+assert '"doublebass": "Double Bass"' in source
 assert 'LITELABS G400 GENRE CANDIDATES' not in source
 assert 'ESSENTIA GENRE CANDIDATES' not in source
 assert 'public_readme_inventory_final_v1' in source
