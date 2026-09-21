@@ -388,6 +388,7 @@ text = text.replace(
 )
 text = text.replace(
     '            "report": report,\n',
+    '            "genre": research_genre,\n'
     '            "detected_genre": research_genre,\n'
     '            "genre_reason": research_genre_reason,\n'
     '            "detected_instruments": sorted(detected_instruments),\n'
@@ -407,6 +408,7 @@ assert 'drums_5stem_kick": "kick"' in check
 assert 'wind_brass_family": "wind"' in check
 assert 'technical_residual' in check
 assert 'dead_or_near_silent' in check
+assert '"genre": research_genre' in check
 assert '"detected_genre": research_genre' in check
 assert '"detected_instruments": sorted(detected_instruments)' in check
 assert '_parent_plus_experimental.zip' not in check
