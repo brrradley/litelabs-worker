@@ -14,6 +14,7 @@ COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.p
 COPY litelabs_vocal_duplicate_guard_patch.py /app/litelabs_vocal_duplicate_guard_patch.py
 COPY multilead_research.py /app/multilead_research.py
 COPY research_run_experimental.py /app/research_run_experimental.py
+COPY run_flower_duet_research.sh /app/run_flower_duet_research.sh
 COPY essentia_research.py /app/essentia_research.py
 COPY litelabs_multilead_research_patch.py /app/litelabs_multilead_research_patch.py
 COPY litelabs_instrument_inventory_research_patch.py /app/litelabs_instrument_inventory_research_patch.py
@@ -172,7 +173,8 @@ PY
 # Apply production changes to known source files. QA is deliberately reset above
 # before its hotfix so an inherited partial patch cannot leave a local variable
 # defined only on some code paths.
-RUN python /app/litelabs_drum_hats_compat_patch.py \
+RUN chmod +x /app/run_flower_duet_research.sh \
+    && python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_locked_vocal_hats_patch.py \
     && python /app/litelabs_vocal_duplicate_guard_patch.py \
     && python /app/litelabs_qa_learning_hotfix.py \
@@ -243,6 +245,10 @@ assert 'essentia_research_second_opinion_v1' in source
 assert 'LITELABS G400 GENRE CANDIDATES' in source
 assert 'ESSENTIA GENRE CANDIDATES' not in source
 assert 'public_readme_model_redaction_v1' in source
+entry_source = Path('/app/run_flower_duet_research.sh').read_text(encoding='utf-8')
+assert '02%20Lakme_%20Sous%20le%20dome%20Epais%20%28The%20Flower%20Duet%29.mp3' in entry_source
+assert 'research_run_experimental.py' in entry_source
+assert 'http.server 8888' in entry_source
 assert '"drums_5stem_hats" in lower' in source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
@@ -327,4 +333,5 @@ assert health.get('build_sha') == os.environ.get('LITELABS_BUILD_SHA', 'unknown'
 print('LiteLABS serverless boot + build identity smoke test passed')
 PY
 
-CMD ["python", "-u", "/app/handler.py"]
+ENTRYPOINT ["/app/run_flower_duet_research.sh"]
+CMD []
