@@ -1,3 +1,5 @@
+FROM ghcr.io/brrradley/litelabs-worker:79b4c30943c0d799527b0f16b136a17f40c75d13 AS genre_model_assets
+
 FROM ghcr.io/brrradley/litelabs-worker:f6d1cbbff61f1c6ce9cf8d2001c2b9f2819db2c4
 
 ARG LITELABS_BUILD_SHA=unknown
@@ -14,6 +16,7 @@ COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.p
 COPY litelabs_vocal_duplicate_guard_patch.py /app/litelabs_vocal_duplicate_guard_patch.py
 COPY multilead_research.py /app/multilead_research.py
 COPY essentia_research.py /app/essentia_research.py
+COPY genre_probe.py /app/genre_probe.py
 COPY litelabs_multilead_research_patch.py /app/litelabs_multilead_research_patch.py
 COPY litelabs_instrument_inventory_research_patch.py /app/litelabs_instrument_inventory_research_patch.py
 COPY litelabs_essentia_research_patch.py /app/litelabs_essentia_research_patch.py
@@ -95,60 +98,60 @@ for url, path, expected in ASSETS:
 print('Locked Becruily vocal benchmark models baked and verified')
 PY
 
-# Experimental Essentia second-opinion detector.
+# Isolated G400 genre probe.
+# Reuse the already-built model bundle from GHCR so production builds never
+# depend on essentia.upf.edu availability.
+COPY --from=genre_model_assets /models/essentia /models/essentia
 RUN python -m pip install --no-cache-dir --pre essentia-tensorflow \
-    && mkdir -p /models/essentia \
-    && python - <<'PY'
+    && python -m py_compile /app/genre_probe.py \
+    && test -s /models/essentia/discogs-effnet-bs64-1.pb \
+    && test -s /models/essentia/genre_discogs400-discogs-effnet-1.pb \
+    && test -s /models/essentia/genre_discogs400-discogs-effnet-1.json
+
+# Exercise the exact RunPod genre path during the image build. This is real
+# inference, not an import/constructor-only smoke test.
+RUN CUDA_VISIBLE_DEVICES=-1 TF_CPP_MIN_LOG_LEVEL=2 python - <<'PY'
+import json
+import subprocess
 from pathlib import Path
-import requests
 
-assets = {
-    "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.pb":
-        Path("/models/essentia/discogs-effnet-bs64-1.pb"),
-    "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb":
-        Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb"),
-    "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.json":
-        Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.json"),
-    "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb":
-        Path("/models/essentia/genre_discogs400-discogs-effnet-1.pb"),
-    "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json":
-        Path("/models/essentia/genre_discogs400-discogs-effnet-1.json"),
-}
-import time
+import numpy as np
+import soundfile as sf
 
-def download(url: str, path: Path, attempts: int = 5) -> None:
-    tmp = path.with_suffix(path.suffix + ".part")
-    for attempt in range(1, attempts + 1):
-        try:
-            tmp.unlink(missing_ok=True)
-            with requests.get(url, stream=True, timeout=(90, 1800)) as response:
-                response.raise_for_status()
-                with tmp.open("wb") as handle:
-                    for chunk in response.iter_content(4 * 1024 * 1024):
-                        if chunk:
-                            handle.write(chunk)
-            if tmp.stat().st_size <= 0:
-                raise RuntimeError(f"Empty Essentia asset: {path}")
-            tmp.replace(path)
-            return
-        except Exception as exc:
-            tmp.unlink(missing_ok=True)
-            if attempt >= attempts:
-                raise
-            wait = min(60, 2 ** attempt)
-            print(
-                f"Essentia download attempt {attempt}/{attempts} failed for {path.name}: {exc}; retrying in {wait}s",
-                flush=True,
-            )
-            time.sleep(wait)
+audio = Path("/tmp/g400-smoke.wav")
+sr = 16000
+t = np.arange(sr * 4, dtype=np.float32) / sr
+signal = (
+    0.08 * np.sin(2 * np.pi * 110 * t)
+    + 0.04 * np.sin(2 * np.pi * 440 * t)
+).astype(np.float32)
+sf.write(audio, signal, sr, subtype="FLOAT")
 
-for url, path in assets.items():
-    download(url, path)
-print("Research Essentia models downloaded")
-PY
-RUN python - <<'PY'
-from essentia.standard import TensorflowPredict2D, TensorflowPredictEffnetDiscogs
-print("Essentia TensorFlow import smoke test passed")
+completed = subprocess.run(
+    ["python", "-u", "/app/genre_probe.py", str(audio)],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    env={
+        **__import__("os").environ,
+        "CUDA_VISIBLE_DEVICES": "-1",
+        "TF_CPP_MIN_LOG_LEVEL": "2",
+    },
+    timeout=120,
+    check=False,
+)
+if completed.returncode != 0:
+    raise RuntimeError(
+        "G400 smoke inference failed:\n"
+        + (completed.stderr or completed.stdout or "")[-5000:]
+    )
+lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+result = json.loads(lines[-1])
+assert result["ok"] is True
+assert result["mode"] == "genre_probe"
+assert len(result["top10"]) == 10
+assert result["embedding_frames"] > 0
+print("G400 genre probe inference smoke test passed:", result["genre"])
 PY
 
 # Experimental MedleyVox duet/co-lead separator. The model runs at 24 kHz and
