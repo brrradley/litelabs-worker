@@ -346,8 +346,8 @@ assert '"genre": research_genre' in source
 assert '"detected_genre": research_genre' in source
 assert '"detected_instruments": sorted(detected_instruments)' in source
 assert '"detected_by_family": detected_by_family' in source
-assert 'genre=research_genre' in source
-assert 'genre_reason=research_genre_reason' in source
+assert '"detected_genre": research_genre' in source
+assert '"genre_reason": research_genre_reason' in source
 assert 'research_genre = "unverified"' in source
 assert 'research_genre = str(genre or' not in source
 assert 'research_genre_reason = str(genre_reason or' not in source
@@ -362,7 +362,10 @@ assert 'root_parent_files' not in source
 assert '"drums_5stem_hats" in lower' in source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
-assert 'metadata_key in ("detected_instruments", "detected_by_family", "genre_top10", "genre_broad_families")' in qa_source
+assert 'if extra.get("detected_genre"):' in qa_source
+assert 'genre = str(extra.get("detected_genre"))' in qa_source
+assert 'genre_reason = str(extra.get("genre_reason"))' in qa_source
+assert 'metadata_key in ("detected_genre", "genre_reason", "detected_instruments", "detected_by_family", "genre_top10", "genre_broad_families")' in qa_source
 
 # Required frozen assets.
 for path in (
