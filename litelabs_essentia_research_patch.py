@@ -120,8 +120,11 @@ if 'essentia_research_second_opinion_v1' not in text:
         # Genre remains secondary routing evidence, but G400 is the canonical
         # public/QA genre when available. The legacy parent heuristic is retained
         # only as an internal fallback when G400 genuinely has no result.
-        research_genre = str(genre or "mixed_or_unknown")
-        research_genre_reason = str(genre_reason or "")
+        # G400 owns Experimental public genre metadata. Do not depend on the
+        # legacy heuristic genre variables here; they are created later in some
+        # inherited production layouts and caused live Unbound/NameError failures.
+        research_genre = "unverified"
+        research_genre_reason = "LiteLABS G400 evidence unavailable"
         if essentia_report.get("ok") and (essentia_report.get("genre_top10") or []):
             research_genre_item = (essentia_report.get("genre_top10") or [])[0]
             research_genre = str(
