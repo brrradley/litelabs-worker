@@ -56,6 +56,41 @@ if '"lead_vocals_a" in lower' not in exp:
         raise RuntimeError("Could not locate vocal QA mapping for multi-lead research")
     exp = exp.replace(generic, replacement, 1)
 
+
+# Research pods are interactive rather than serverless, so allow a completed
+# archive to be copied out of the TemporaryDirectory before it is destroyed.
+if '"local_result_path": str(local_result_path) if local_result_path else None' not in exp:
+    upload_anchor = '''        uploaded = False
+        put_url = str(payload.get("result_put_url") or "").strip()
+        if put_url:
+'''
+    upload_replacement = '''        uploaded = False
+        local_result_path = None
+        research_output_dir = str(payload.get("research_output_dir") or "").strip()
+        if research_output_dir:
+            import shutil
+            output_root = Path(research_output_dir)
+            output_root.mkdir(parents=True, exist_ok=True)
+            local_result_path = output_root / archive.name
+            shutil.copy2(archive, local_result_path)
+
+        put_url = str(payload.get("result_put_url") or "").strip()
+        if put_url:
+'''
+    if upload_anchor not in exp:
+        raise RuntimeError("Could not locate research archive upload anchor")
+    exp = exp.replace(upload_anchor, upload_replacement, 1)
+
+    result_anchor = '''            "result_url": payload.get("result_public_url"),
+            "root_parent_files":'''
+    result_replacement = '''            "result_url": payload.get("result_public_url"),
+            "local_result_path": str(local_result_path) if local_result_path else None,
+            "root_parent_files":'''
+    if result_anchor not in exp:
+        raise RuntimeError("Could not locate research result return anchor")
+    exp = exp.replace(result_anchor, result_replacement, 1)
+
+
 exp_path.write_text(exp, encoding="utf-8")
 
 qa = qa_path.read_text(encoding="utf-8")
