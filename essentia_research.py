@@ -57,8 +57,19 @@ def run_essentia_research(instrument_audio: Path, genre_audio: Path, progress=No
         graphFilename=str(EMBEDDING),
         output="PartitionedCall:1",
     )
-    instrument_model = TensorflowPredict2D(graphFilename=str(INSTRUMENT_HEAD))
-    genre_model = TensorflowPredict2D(graphFilename=str(GENRE_HEAD))
+    # The shipped frozen graphs expose SavedModel-style node names in this
+    # Essentia/TensorFlow build. Configure them explicitly rather than relying
+    # on TensorflowPredict2D's older model/Placeholder + model/Sigmoid defaults.
+    instrument_model = TensorflowPredict2D(
+        graphFilename=str(INSTRUMENT_HEAD),
+        input="serving_default_model_Placeholder",
+        output="PartitionedCall:0",
+    )
+    genre_model = TensorflowPredict2D(
+        graphFilename=str(GENRE_HEAD),
+        input="serving_default_model_Placeholder",
+        output="PartitionedCall:0",
+    )
 
     if progress:
         progress("LiteLABS Inst-MTG", 41)
