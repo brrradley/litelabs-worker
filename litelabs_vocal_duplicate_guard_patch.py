@@ -279,6 +279,8 @@ exp_path.write_text(text, encoding='utf-8')
 
 check = exp_path.read_text(encoding='utf-8')
 assert 'suppressed_as_gain_scaled_duplicate' in check
-assert '"backing_detected": bool(duplicate_analysis["backing_detected"])' in check
+assert 'acoustic_role_validation_v2' in check
+assert '_vx_role_evidence' in check
+assert '"backing_detected": bool(backing_exported)' in check
 assert 'gain_scaled_duplicate_of_lead' in check
 print('LiteLABS gain-scaled duplicate backing-vocal guard applied')
