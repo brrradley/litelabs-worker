@@ -152,7 +152,8 @@ from essentia.standard import TensorflowPredictEffnetDiscogs
 from essentia_research import _make_classifier
 
 # Validate the exact runtime loader against the classifier files baked into
-# this image. The loader supports both graph layouts observed in production.
+# this image. Endpoint names are inspected first; invalid native constructors
+# must never be tried speculatively.
 TensorflowPredictEffnetDiscogs(
     graphFilename="/models/essentia/discogs-effnet-bs64-1.pb",
     output="PartitionedCall:1",
@@ -285,6 +286,9 @@ assert 'DETECTED INSTRUMENTS' in source
 assert 'essentia_research_second_opinion_v1' in source
 essentia_source = Path('/app/essentia_research.py').read_text(encoding='utf-8')
 assert '_make_classifier' in essentia_source
+assert '_graph_node_names' in essentia_source
+assert 'GraphDef' in essentia_source
+assert 'candidates = (' not in essentia_source
 assert 'serving_default_model_Placeholder' in essentia_source
 assert 'PartitionedCall' in essentia_source
 assert 'model/Placeholder' in essentia_source
