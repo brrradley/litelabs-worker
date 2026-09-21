@@ -6,30 +6,39 @@ qa_path = Path("/app/qa_research.py")
 exp = exp_path.read_text(encoding="utf-8")
 
 anchor = "        # Mega53 is the routing brain:"
-block = '''        # Experimental multi-singer branch. Experimental is currently
-        # admin-only at the addon/usergroup layer, so run this path on every
-        # Experimental extraction and keep it fail-open.
-        try:
-            from multilead_research import run_multilead_research
-            multi_lead_report = run_multilead_research(
-                stems["vocals"],
-                experimental,
-                track,
-                progress=progress,
-            )
-            vocal_report["multi_lead"] = multi_lead_report
-            timings["multi_lead_medleyvox"] = float(multi_lead_report.get("runtime_seconds") or 0.0)
-            vocal_files.extend([
-                name for name in multi_lead_report.get("files", [])
-                if name not in vocal_files
-            ])
-        except Exception as exc:
+block = '''        # MedleyVox is expensive and not yet reliable enough for every public
+        # extraction. Keep it available for explicit research requests only.
+        if bool(payload.get("enable_multi_lead")):
+            try:
+                from multilead_research import run_multilead_research
+                multi_lead_report = run_multilead_research(
+                    stems["vocals"],
+                    experimental,
+                    track,
+                    progress=progress,
+                )
+                vocal_report["multi_lead"] = multi_lead_report
+                timings["multi_lead_medleyvox"] = float(
+                    multi_lead_report.get("runtime_seconds") or 0.0
+                )
+                vocal_files.extend([
+                    name for name in multi_lead_report.get("files", [])
+                    if name not in vocal_files
+                ])
+            except Exception as exc:
+                vocal_report["multi_lead"] = {
+                    "ok": False,
+                    "error": str(exc),
+                    "error_type": exc.__class__.__name__,
+                }
+                print(f"LiteLABS multi-lead separation skipped: {exc}", flush=True)
+        else:
             vocal_report["multi_lead"] = {
                 "ok": False,
-                "error": str(exc),
-                "error_type": exc.__class__.__name__,
+                "ran": False,
+                "reason": "disabled_by_default_fast_path",
             }
-            print(f"LiteLABS multi-lead separation skipped: {exc}", flush=True)
+            timings["multi_lead_medleyvox"] = 0.0
 
 '''
 if "multi_lead_medleyvox" not in exp:
@@ -40,7 +49,7 @@ if "multi_lead_medleyvox" not in exp:
 # Teach the silent QA collector that A/B are two co-lead children rather than
 # accidentally collapsing them into the generic lead_vocals label.
 generic = '''            if "lead_vocals" in lower:
-                label, model = "lead_vocals", "Becruily Karaoke (25% SW + 75% MelBand parent)"
+                label, model = "lead_vocals", "LiteLABS-VX v2 single-pass vocal parent route"
 '''
 replacement = '''            if "lead_vocals_a" in lower:
                 label, model = "lead_vocals_a", "MedleyVox vocals 238 (co-lead A)"
