@@ -286,8 +286,9 @@ assert 'DETECTED INSTRUMENTS' in source
 assert 'essentia_research_second_opinion_v1' in source
 essentia_source = Path('/app/essentia_research.py').read_text(encoding='utf-8')
 assert '_make_classifier' in essentia_source
-assert '_graph_node_names' in essentia_source
-assert 'GraphDef' in essentia_source
+assert '_graph_contains' in essentia_source
+assert 'read_bytes()' in essentia_source
+assert 'import tensorflow as tf' not in essentia_source
 assert 'candidates = (' not in essentia_source
 assert 'serving_default_model_Placeholder' in essentia_source
 assert 'PartitionedCall' in essentia_source
