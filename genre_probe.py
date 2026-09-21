@@ -42,9 +42,19 @@ def _aggregate(predictions: np.ndarray, classes: list[str]) -> list[dict]:
 
 def _public_label(raw_label: str) -> str:
     label = str(raw_label or "").strip()
-    if "---" in label:
-        label = label.split("---", 1)[1]
-    return label.replace("_", " ").strip()
+    if "---" not in label:
+        return label.replace("_", " ").strip()
+
+    family, style = label.split("---", 1)
+    family = family.replace("_", " ").strip()
+    style = style.replace("_", " ").strip()
+
+    # For classical recordings the broad family is the useful public genre;
+    # the raw G400 label still preserves period/style detail such as Romantic
+    # or Opera for technical inspection.
+    if family == "Classical":
+        return "Classical"
+    return style or family
 
 
 def run_genre_probe(audio_path: Path) -> dict:
