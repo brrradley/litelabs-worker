@@ -284,17 +284,16 @@ assert benchmark['status'] == 'locked'
 assert benchmark['locked_recipes']['lead_vocals']['quality_score'] == 65.48
 assert benchmark['locked_recipes']['backing_vocals']['strict_quality_score'] == 19.77
 
-# Locked vocal production recipes.
-assert '"benchmark_id": "vocal_benchmark_v1"' in source
-assert '0.25 * np.asarray(sw_vocals_audio' in source
-assert '0.75 * np.asarray(alt_vocals_audio' in source
-assert 'mel_band_roformer_vocals_becruily.ckpt' in source
-assert source.count('mel_band_roformer_karaoke_becruily.ckpt') >= 2
-assert 'best_backing = fast_parent - fast_lead' in source
-assert 'def _vx_find_output(directory, role)' in source
-assert 'secondary/Instrumental' in source
-assert source.count('"secondary"') >= 2
-assert 'best_stems_share_single_parent_pair' in source
+# Fast production vocal route: one separator pass on the clean vocal parent.
+assert '"benchmark_id": "vocal_route_v2_single_pass"' in source
+assert 'mel_band_roformer_karaoke_becruily.ckpt' in source
+assert 'mel_band_roformer_vocals_becruily.ckpt' not in source
+assert 'vocal_alt_parent' not in source
+assert 'vocal_fast_karaoke' not in source
+assert 'best_backing = fast_parent - fast_lead' not in source
+assert 'Becruily Karaoke vocals output from SW vocal parent' in source
+assert 'Becruily Karaoke instrumental output from SW vocal parent' in source
+assert '"best_stems_share_single_parent_pair": True' in source
 assert 'suppressed_as_gain_scaled_duplicate' in source
 assert 'gain_scaled_duplicate_of_lead' in source
 assert '"backing_detected": bool(duplicate_analysis["backing_detected"])' in source
@@ -322,9 +321,12 @@ assert 'heuristic_stem_confidence_v3' in qa_source
 assert 'confidence_not_fidelity' in qa_source
 assert 'complement_residual' in qa_source
 assert 'multi_lead_medleyvox' in source
+assert 'disabled_by_default_fast_path' in source
 assert '"multi_lead_children": ("lead_vocals_a", "lead_vocals_b")' in qa_source
-assert 'global_instrument_inventory_v1' in source
-assert 'global_inventory_reused_for_family_router' in source
+assert 'validated_instrument_router_v2' in source
+assert 'validated_instrument_router_reused_v2' in source
+assert 'MVSep Mega53' not in source
+assert 'Analysing Instrument Inventory' not in source
 assert 'DETECTED INSTRUMENTS' in source
 assert 'validated_analysis_pre_stem_v2' in source
 assert 'validated_analysis_complete_before_stems_v2' in source
@@ -348,6 +350,7 @@ assert 'experimental_pack_only_v1' in source
 assert '_experimental_stems.zip' in source
 assert '_parent_plus_experimental.zip' not in source
 assert 'root_parent_files' not in source
+assert 'experimental = final / "experimental"' not in source
 assert '"drums_5stem_hats" in lower' in source
 assert 'experimental_children_v1' in handler_source
 assert 'genre_probe_handler_v1' in handler_source
@@ -367,7 +370,7 @@ for path in (
 ):
     assert Path(path).is_file(), path
 
-print('LiteLABS locked vocal benchmark + hats + deterministic QA + build identity verified')
+print('LiteLABS fast routing + single-pass vocals + flat pack + deterministic QA verified')
 PY
 
 # Execute the QA function on real temporary audio during the image build. Static
