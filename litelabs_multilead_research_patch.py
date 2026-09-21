@@ -61,8 +61,12 @@ if '"lead_vocals_a" in lower' not in exp:
 # archive out of the TemporaryDirectory immediately before the final result is
 # returned; this anchor is deliberately independent of the upload implementation.
 if '"local_result_path": str(local_result_path) if local_result_path else None' not in exp:
+    # There can be an earlier timings["total"] inside the 413/result-too-large
+    # return path. We must patch the FINAL success path, otherwise the insertion
+    # de-indents out of the 413 block and leaves its return orphaned.
     finish_anchor = '        timings["total"] = round(time.monotonic() - started, 3)\n'
-    if finish_anchor not in exp:
+    finish_pos = exp.rfind(finish_anchor)
+    if finish_pos < 0:
         raise RuntimeError("Could not locate final timing anchor for local research output")
     local_copy = '''        local_result_path = None
         research_output_dir = str(payload.get("research_output_dir") or "").strip()
@@ -74,15 +78,18 @@ if '"local_result_path": str(local_result_path) if local_result_path else None' 
             shutil.copy2(archive, local_result_path)
 
 '''
-    exp = exp.replace(finish_anchor, local_copy + finish_anchor, 1)
+    exp = exp[:finish_pos] + local_copy + exp[finish_pos:]
 
+    # Likewise, add the local path only to the FINAL successful result object.
     result_anchor = '            "uploaded": uploaded,\n'
-    if result_anchor not in exp:
-        raise RuntimeError("Could not locate result uploaded field for local research output")
-    exp = exp.replace(
-        result_anchor,
-        result_anchor + '            "local_result_path": str(local_result_path) if local_result_path else None,\n',
-        1,
+    result_pos = exp.rfind(result_anchor)
+    if result_pos < 0:
+        raise RuntimeError("Could not locate final result uploaded field for local research output")
+    result_end = result_pos + len(result_anchor)
+    exp = (
+        exp[:result_end]
+        + '            "local_result_path": str(local_result_path) if local_result_path else None,\n'
+        + exp[result_end:]
     )
 
 
