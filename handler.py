@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -409,6 +410,55 @@ def handler(job: dict) -> dict:
         post_progress(progress_url, progress_token, progress_job_id, message, percent)
 
     mode = str(payload.get("mode") or "routed_extraction_v1").strip()
+
+    if mode == "genre_probe":
+        try:
+            filename = str(payload.get("filename") or Path(urlparse(audio_url).path).name or "track.audio")
+            timeout_seconds = max(30, int(payload.get("genre_timeout_seconds") or 300))
+            with tempfile.TemporaryDirectory(prefix="litelabs_genre_probe_") as temp_dir:
+                input_path = Path(temp_dir) / filename
+                download_file(audio_url, input_path)
+
+                env = os.environ.copy()
+                env["CUDA_VISIBLE_DEVICES"] = "-1"
+                env["TF_CPP_MIN_LOG_LEVEL"] = "2"
+                completed = subprocess.run(
+                    ["python", "-u", "/app/genre_probe.py", str(input_path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                    timeout=timeout_seconds,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    return {
+                        "ok": False,
+                        "mode": mode,
+                        "error": "G400 genre probe failed",
+                        "returncode": completed.returncode,
+                        "stderr_tail": (completed.stderr or "")[-4000:],
+                        "stdout_tail": (completed.stdout or "")[-2000:],
+                    }
+
+                output_lines = [
+                    line.strip()
+                    for line in (completed.stdout or "").splitlines()
+                    if line.strip()
+                ]
+                if not output_lines:
+                    raise RuntimeError("G400 genre probe returned no JSON output")
+                result = json.loads(output_lines[-1])
+                result["filename"] = filename
+                return result
+        except Exception as exc:
+            return {
+                "ok": False,
+                "mode": mode,
+                "error": str(exc),
+                "error_type": exc.__class__.__name__,
+            }
+
     if mode == "routed_extraction_v1":
         try:
             from routed_extraction_v1 import build_routed_extraction_v1
