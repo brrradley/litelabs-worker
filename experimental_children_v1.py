@@ -239,6 +239,15 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
                     bundle.write(p, arcname=str(p.relative_to(final)))
 
         uploaded = False
+        local_result_path = None
+        research_output_dir = str(payload.get("research_output_dir") or "").strip()
+        if research_output_dir:
+            import shutil
+            output_root = Path(research_output_dir)
+            output_root.mkdir(parents=True, exist_ok=True)
+            local_result_path = output_root / archive.name
+            shutil.copy2(archive, local_result_path)
+
         put_url = str(payload.get("result_put_url") or "").strip()
         if put_url:
             emit("Uploading Stem Pack", 96)
@@ -258,6 +267,7 @@ def build_experimental_children_v1(payload: dict, progress=None) -> dict:
             "archive_size_bytes": archive.stat().st_size,
             "uploaded": uploaded,
             "result_url": payload.get("result_public_url"),
+            "local_result_path": str(local_result_path) if local_result_path else None,
             "root_parent_files": sorted(p.name for p in final.iterdir() if p.is_file()),
             "experimental_files": sorted(p.name for p in experimental.iterdir() if p.is_file()),
             "report": report,
