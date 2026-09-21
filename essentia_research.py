@@ -41,28 +41,37 @@ def _graph_contains(graph_filename: Path, node_name: str) -> bool:
 def _make_classifier(graph_filename: Path):
     from essentia.standard import TensorflowPredict2D
 
-    if (
-        _graph_contains(graph_filename, "serving_default_model_Placeholder")
-        and _graph_contains(graph_filename, "PartitionedCall")
-    ):
-        input_name = "serving_default_model_Placeholder"
-        output_name = "PartitionedCall"
-    elif (
-        _graph_contains(graph_filename, "model/Placeholder")
-        and _graph_contains(graph_filename, "model/Sigmoid")
-    ):
-        input_name = "model/Placeholder"
-        output_name = "model/Sigmoid"
-    else:
-        raise RuntimeError(
-            "Unsupported Essentia classifier graph layout for "
-            f"{graph_filename.name}"
+    # Match Essentia's own reference scripts exactly. The Jamendo instrument
+    # head is intentionally constructed without explicit endpoint names; the
+    # Discogs400 genre head uses the SavedModel wrapper endpoints below.
+    if graph_filename.name.startswith("mtg_jamendo_instrument-"):
+        return TensorflowPredict2D(
+            graphFilename=str(graph_filename),
         )
 
-    return TensorflowPredict2D(
-        graphFilename=str(graph_filename),
-        input=input_name,
-        output=output_name,
+    if graph_filename.name.startswith("genre_discogs400-"):
+        if (
+            _graph_contains(graph_filename, "serving_default_model_Placeholder")
+            and _graph_contains(graph_filename, "PartitionedCall")
+        ):
+            return TensorflowPredict2D(
+                graphFilename=str(graph_filename),
+                input="serving_default_model_Placeholder",
+                output="PartitionedCall:0",
+            )
+        if (
+            _graph_contains(graph_filename, "model/Placeholder")
+            and _graph_contains(graph_filename, "model/Sigmoid")
+        ):
+            return TensorflowPredict2D(
+                graphFilename=str(graph_filename),
+                input="model/Placeholder",
+                output="model/Sigmoid",
+            )
+
+    raise RuntimeError(
+        "Unsupported Essentia classifier graph layout for "
+        f"{graph_filename.name}"
     )
 
 
@@ -176,3 +185,28 @@ def run_essentia_research(instrument_audio: Path, genre_audio: Path, progress=No
         "genre_broad_families": broad_ranked[:8],
         "research_only": True,
     }
+
+
+def _cli() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="LiteLABS Essentia research worker")
+    parser.add_argument("instrument_audio")
+    parser.add_argument("genre_audio")
+    parser.add_argument("output_json")
+    args = parser.parse_args()
+
+    result = run_essentia_research(
+        Path(args.instrument_audio),
+        Path(args.genre_audio),
+        progress=None,
+    )
+    Path(args.output_json).write_text(
+        json.dumps(result, indent=2),
+        encoding="utf-8",
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())
