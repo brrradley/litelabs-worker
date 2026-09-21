@@ -16,7 +16,9 @@ if 'essentia_research_second_opinion_v1' not in text:
             "error": "not_run",
         }
         try:
-            from essentia_research import run_essentia_research
+            import os as _ess_os
+            import subprocess as _ess_subprocess
+            import sys as _ess_sys
 
             genre_sample_path = root / "essentia_genre_sample.flac"
             genre_audio, genre_sr = _read(source)
@@ -32,10 +34,37 @@ if 'essentia_research_second_opinion_v1' not in text:
             genre_sample = np.concatenate(genre_parts, axis=0) if genre_parts else genre_audio[:genre_segment_len]
             _write_flac(genre_sample_path, genre_sample, genre_sr)
 
-            essentia_report = run_essentia_research(
-                global_inventory_in / "instrumental.flac",
-                genre_sample_path,
-                progress=progress,
+            # Isolate Essentia's legacy TensorFlow runtime from the main worker.
+            # The package targets CUDA 11 while production workers use CUDA 13;
+            # running it CPU-only in a child process prevents native TF failures
+            # from killing the extraction worker or polluting later GPU stages.
+            if progress:
+                progress("LiteLABS Inst-MTG / G400", 41)
+            essentia_json_path = root / "essentia_research_result.json"
+            essentia_env = _ess_os.environ.copy()
+            essentia_env["CUDA_VISIBLE_DEVICES"] = "-1"
+            essentia_env["TF_CPP_MIN_LOG_LEVEL"] = "2"
+            essentia_proc = _ess_subprocess.run(
+                [
+                    _ess_sys.executable,
+                    "/app/essentia_research.py",
+                    str(global_inventory_in / "instrumental.flac"),
+                    str(genre_sample_path),
+                    str(essentia_json_path),
+                ],
+                env=essentia_env,
+                stdout=_ess_subprocess.PIPE,
+                stderr=_ess_subprocess.PIPE,
+                text=True,
+                timeout=300,
+            )
+            if essentia_proc.returncode != 0:
+                err_tail = (essentia_proc.stderr or essentia_proc.stdout or "")[-5000:]
+                raise RuntimeError(
+                    f"Essentia subprocess failed ({essentia_proc.returncode}): {err_tail}"
+                )
+            essentia_report = json.loads(
+                essentia_json_path.read_text(encoding="utf-8")
             )
         except Exception as exc:
             essentia_report = {
