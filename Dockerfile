@@ -278,10 +278,12 @@ assert 'best_stems_share_single_parent_pair' in source
 assert 'suppressed_as_gain_scaled_duplicate' in source
 assert 'gain_scaled_duplicate_of_lead' in source
 assert 'public_role_correction' in source
-assert 'acoustic_role_validation_v2' in source
+assert 'live_validated_vocal_roles_v3' in source
+assert 'lead_plus_backing_equals_sw_vocal_parent' in source
 assert '_vx_role_evidence' in source
 assert 'direct_backing_path = _vx_find_output(fast_out, "vocals")' in source
-assert 'parent_minus_fast_secondary' in source
+assert 'public_lead = np.asarray(parent_vocals - public_backing' in source
+assert 'backing_subset_valid' in source
 assert '"backing_detected": bool(backing_exported)' in source
 
 # HH and cymbals remain one DrumSep inference but are merged before encoding.
@@ -340,8 +342,12 @@ assert '"archive_layout": "flat"' in source
 assert 'bundle.write(p, arcname=p.name)' in source
 assert 'public_detected_by_family' in source
 assert 'research_genre' in source
+assert '"genre": research_genre' in source
+assert '"detected_genre": research_genre' in source
 assert '"detected_instruments": sorted(detected_instruments)' in source
 assert '"detected_by_family": detected_by_family' in source
+assert 'genre=research_genre' in source
+assert 'genre_reason=research_genre_reason' in source
 assert 'research_genre = "unverified"' in source
 assert 'research_genre = str(genre or' not in source
 assert 'research_genre_reason = str(genre_reason or' not in source
