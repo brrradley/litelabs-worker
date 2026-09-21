@@ -8,6 +8,9 @@ ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 
 WORKDIR /app
 
+# Use the repository handler rather than the inherited base-image handler.
+COPY handler.py /app/handler.py
+
 # Start QA from the repository's known v2 source instead of the already-patched
 # copy inherited from the base image. This makes the learning hotfix deterministic.
 COPY qa_research.py /app/qa_research.py
@@ -344,25 +347,58 @@ print('QA runtime smoke test passed')
 PY
 
 # Smoke-test the real final handler startup path without entering RunPod's
-# blocking serverless loop.
+# blocking serverless loop. Also invoke the isolated genre_probe route itself so
+# a missing/stale inherited handler can never pass the build again.
 RUN python - <<'PY'
 import os
 import runpy
+from pathlib import Path
+
+import numpy as np
 import runpod.serverless
+import soundfile as sf
+
 captured = {}
 original_start = runpod.serverless.start
+
 def fake_start(config):
     captured['config'] = config
+
 runpod.serverless.start = fake_start
 try:
-    ns = runpy.run_path('/app/handler.py', run_name='__main__')
+    runpy.run_path('/app/handler.py', run_name='__main__')
 finally:
     runpod.serverless.start = original_start
+
 handler = (captured.get('config') or {}).get('handler')
 assert callable(handler)
+
 health = handler({'input': {'healthcheck': True}})
 assert health.get('build_sha') == os.environ.get('LITELABS_BUILD_SHA', 'unknown')
-print('LiteLABS serverless boot + build identity smoke test passed')
+
+audio = Path('/tmp/handler-g400-smoke.wav')
+sr = 16000
+t = np.arange(sr * 4, dtype=np.float32) / sr
+signal = (
+    0.08 * np.sin(2 * np.pi * 110 * t)
+    + 0.04 * np.sin(2 * np.pi * 440 * t)
+).astype(np.float32)
+sf.write(audio, signal, sr, subtype='FLOAT')
+
+probe = handler({
+    'input': {
+        'mode': 'genre_probe',
+        'audio_path': str(audio),
+        'filename': audio.name,
+        'genre_timeout_seconds': 120,
+    }
+})
+assert probe.get('ok') is True, probe
+assert probe.get('mode') == 'genre_probe', probe
+assert probe.get('model') == 'G400', probe
+assert len(probe.get('top10') or []) == 10, probe
+
+print('LiteLABS serverless boot + genre_probe route smoke test passed:', probe.get('genre'))
 PY
 
 CMD ["python", "-u", "/app/handler.py"]
