@@ -202,6 +202,22 @@ text = text.replace(
     '            genre_reason=research_genre_reason,\n',
 )
 
+# Add merged detector/G400 evidence to the QA extra payload so downstream
+# LiteRECORDS packaging has access to the same canonical metadata.
+qa_call = text.find('build_research_qa(')
+if qa_call >= 0:
+    extra_pos = text.find('extra={', qa_call)
+    if extra_pos >= 0:
+        insert_pos = extra_pos + len('extra={')
+        qa_extra = (
+            '\n                "detected_instruments": sorted(detected_instruments),'
+            '\n                "detected_by_family": detected_by_family,'
+            '\n                "genre_top10": list(essentia_report.get("genre_top10") or [])[:10],'
+            '\n                "genre_broad_families": list(essentia_report.get("genre_broad_families") or [])[:8],'
+        )
+        if '"detected_instruments": sorted(detected_instruments)' not in text[qa_call:]:
+            text = text[:insert_pos] + qa_extra + text[insert_pos:]
+
 path.write_text(text, encoding='utf-8')
 
 check = path.read_text(encoding='utf-8')
