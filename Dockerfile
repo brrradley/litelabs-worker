@@ -285,6 +285,7 @@ assert 'direct_backing_path = _vx_find_output(fast_out, "vocals")' in source
 assert 'public_lead = np.asarray(parent_vocals - public_backing' in source
 assert 'backing_subset_valid' in source
 assert '"backing_detected": bool(backing_exported)' in source
+assert 'backing_is_vocal' not in source
 
 # HH and cymbals remain one DrumSep inference but are merged before encoding.
 assert 'in_memory_hh_plus_cymbals_before_final_encode' in source
