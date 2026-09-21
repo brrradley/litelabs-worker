@@ -9,6 +9,22 @@ qa = qa_path.read_text(encoding='utf-8')
 # the assignment block that creates it. That turns a post-delivery QA detail
 # into a fatal UnboundLocalError after the expensive GPU work has completed.
 source_anchor = '    source_audio, source_sr = _read(source)\n    source_mono = _mono(source_audio)\n'
+genre_override_block = (
+    '    if isinstance(extra, dict):\n'
+    '        if extra.get("detected_genre"):\n'
+    '            genre = str(extra.get("detected_genre"))\n'
+    '        if extra.get("genre_reason"):\n'
+    '            genre_reason = str(extra.get("genre_reason"))\n'
+)
+if '        if extra.get("detected_genre"):\n' not in qa:
+    if source_anchor not in qa:
+        raise RuntimeError('Could not locate QA genre override anchor')
+    qa = qa.replace(
+        source_anchor,
+        genre_override_block + source_anchor,
+        1,
+    )
+
 if 'source_metrics = _signal_metrics(source_audio, source_sr)' not in qa:
     if source_anchor not in qa:
         raise RuntimeError('Could not locate QA source metrics anchor')
@@ -52,7 +68,7 @@ qa = qa.replace(
     '    if extra:\n        record["pipeline_metrics"] = extra\n',
     '    if extra:\n'
     '        record["pipeline_metrics"] = extra\n'
-    '        for metadata_key in ("detected_instruments", "detected_by_family", "genre_top10", "genre_broad_families"):\n'
+    '        for metadata_key in ("detected_genre", "genre_reason", "detected_instruments", "detected_by_family", "genre_top10", "genre_broad_families"):\n'
     '            if metadata_key in extra:\n'
     '                record[metadata_key] = extra[metadata_key]\n',
     1,
@@ -96,6 +112,9 @@ recipe_fragment = (
     '        },\n'
 )
 assert recipe_fragment in qa_check
+assert 'if extra.get("detected_genre"):' in qa_check
+assert 'genre = str(extra.get("detected_genre"))' in qa_check
+assert 'genre_reason = str(extra.get("genre_reason"))' in qa_check
 assert '"drum_children": ("kick", "snare", "toms", "hats")' in qa_check
 assert '"drums_5stem_hats" in lower' in exp_check
 print('LiteLABS QA learning observation + hats telemetry hotfix applied')
