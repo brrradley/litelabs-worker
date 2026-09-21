@@ -30,45 +30,33 @@ def _aggregate(predictions: np.ndarray, classes: list[str]) -> dict[str, dict[st
     return result
 
 
-def _graph_node_names(graph_filename: Path) -> set[str]:
-    # Parse GraphDef directly so we can select the correct endpoint pair before
-    # constructing Essentia's TensorflowPredict2D. Trying invalid endpoint pairs
-    # in sequence can leave the native TensorFlow wrapper in a bad state.
-    import tensorflow as tf
-
-    graph_def = tf.compat.v1.GraphDef()
-    graph_def.ParseFromString(graph_filename.read_bytes())
-    return {str(node.name) for node in graph_def.node}
+def _graph_contains(graph_filename: Path, node_name: str) -> bool:
+    # TensorFlow node names are stored as UTF-8 strings inside GraphDef protobufs.
+    # Essentia bundles the native TensorFlow runtime, but this image intentionally
+    # does not install the large Python tensorflow package. A direct byte scan is
+    # sufficient for selecting between the two graph layouts we have observed.
+    return node_name.encode("utf-8") in graph_filename.read_bytes()
 
 
 def _make_classifier(graph_filename: Path):
     from essentia.standard import TensorflowPredict2D
 
-    nodes = _graph_node_names(graph_filename)
     if (
-        "serving_default_model_Placeholder" in nodes
-        and "PartitionedCall" in nodes
+        _graph_contains(graph_filename, "serving_default_model_Placeholder")
+        and _graph_contains(graph_filename, "PartitionedCall")
     ):
         input_name = "serving_default_model_Placeholder"
         output_name = "PartitionedCall"
     elif (
-        "model/Placeholder" in nodes
-        and "model/Sigmoid" in nodes
+        _graph_contains(graph_filename, "model/Placeholder")
+        and _graph_contains(graph_filename, "model/Sigmoid")
     ):
         input_name = "model/Placeholder"
         output_name = "model/Sigmoid"
     else:
-        interesting = sorted(
-            name for name in nodes
-            if (
-                "Placeholder" in name
-                or "PartitionedCall" in name
-                or "Sigmoid" in name
-            )
-        )
         raise RuntimeError(
-            "Unsupported Essentia classifier graph layout: "
-            + ", ".join(interesting[:24])
+            "Unsupported Essentia classifier graph layout for "
+            f"{graph_filename.name}"
         )
 
     return TensorflowPredict2D(
