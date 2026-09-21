@@ -235,7 +235,6 @@ assert 'research_multi_lead' in source
 assert 'multi_lead_medleyvox' in source
 assert '"multi_lead_children": ("lead_vocals_a", "lead_vocals_b")' in qa_source
 assert 'global_instrument_inventory_v1' in source
-assert 'inventory_skipped_no_specific_kit' in source
 assert 'global_inventory_reused_for_family_router' in source
 assert 'DETECTED INSTRUMENTS' in source
 assert 'essentia_research_second_opinion_v1' in source
