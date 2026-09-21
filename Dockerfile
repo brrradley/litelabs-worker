@@ -14,8 +14,10 @@ COPY litelabs_locked_vocal_hats_patch.py /app/litelabs_locked_vocal_hats_patch.p
 COPY litelabs_vocal_duplicate_guard_patch.py /app/litelabs_vocal_duplicate_guard_patch.py
 COPY multilead_research.py /app/multilead_research.py
 COPY research_run_experimental.py /app/research_run_experimental.py
+COPY essentia_research.py /app/essentia_research.py
 COPY litelabs_multilead_research_patch.py /app/litelabs_multilead_research_patch.py
 COPY litelabs_instrument_inventory_research_patch.py /app/litelabs_instrument_inventory_research_patch.py
+COPY litelabs_essentia_research_patch.py /app/litelabs_essentia_research_patch.py
 COPY litelabs_qa_learning_hotfix.py /app/litelabs_qa_learning_hotfix.py
 COPY litelabs_build_identity_patch.py /app/litelabs_build_identity_patch.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
@@ -91,6 +93,41 @@ for url, path, expected in ASSETS:
 print('Locked Becruily vocal benchmark models baked and verified')
 PY
 
+# Research-only Essentia second-opinion detector.
+RUN python -m pip install --no-cache-dir --pre essentia-tensorflow \
+    && mkdir -p /models/essentia \
+    && python - <<'PY'
+from pathlib import Path
+import requests
+
+assets = {
+    "https://essentia.upf.edu/models/music-style-classification/discogs-effnet/discogs-effnet-bs64-1.pb":
+        Path("/models/essentia/discogs-effnet-bs64-1.pb"),
+    "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.pb":
+        Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb"),
+    "https://essentia.upf.edu/models/classification-heads/mtg_jamendo_instrument/mtg_jamendo_instrument-discogs-effnet-1.json":
+        Path("/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.json"),
+    "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.pb":
+        Path("/models/essentia/genre_discogs400-discogs-effnet-1.pb"),
+    "https://essentia.upf.edu/models/classification-heads/genre_discogs400/genre_discogs400-discogs-effnet-1.json":
+        Path("/models/essentia/genre_discogs400-discogs-effnet-1.json"),
+}
+for url, path in assets.items():
+    with requests.get(url, stream=True, timeout=(30, 1800)) as response:
+        response.raise_for_status()
+        with path.open("wb") as handle:
+            for chunk in response.iter_content(4 * 1024 * 1024):
+                if chunk:
+                    handle.write(chunk)
+    if path.stat().st_size <= 0:
+        raise RuntimeError(f"Empty Essentia asset: {path}")
+print("Research Essentia models downloaded")
+PY
+RUN python - <<'PY'
+from essentia.standard import TensorflowPredict2D, TensorflowPredictEffnetDiscogs
+print("Essentia TensorFlow import smoke test passed")
+PY
+
 # Research-only MedleyVox duet/co-lead experiment. Production/main never sees
 # these dependencies or weights. The model runs at 24 kHz and is used only when
 # input.research_multi_lead=true on the research image.
@@ -140,8 +177,9 @@ RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_qa_learning_hotfix.py \
     && python /app/litelabs_multilead_research_patch.py \
     && python /app/litelabs_instrument_inventory_research_patch.py \
+    && python /app/litelabs_essentia_research_patch.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/research_run_experimental.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/research_run_experimental.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -200,6 +238,8 @@ assert 'global_instrument_inventory_v1' in source
 assert 'inventory_skipped_no_specific_kit' in source
 assert 'global_inventory_reused_for_family_router' in source
 assert 'DETECTED INSTRUMENTS' in source
+assert 'essentia_research_second_opinion_v1' in source
+assert 'ESSENTIA GENRE CANDIDATES' in source
 assert '"drums_5stem_hats" in lower' in source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
@@ -210,6 +250,9 @@ for path in (
     '/models/audio_separator/mel_band_roformer_vocals_becruily.ckpt',
     '/models/audio_separator/config_karaoke_becruily.yaml',
     '/models/audio_separator/mel_band_roformer_karaoke_becruily.ckpt',
+    '/models/essentia/discogs-effnet-bs64-1.pb',
+    '/models/essentia/mtg_jamendo_instrument-discogs-effnet-1.pb',
+    '/models/essentia/genre_discogs400-discogs-effnet-1.pb',
 ):
     assert Path(path).is_file(), path
 
