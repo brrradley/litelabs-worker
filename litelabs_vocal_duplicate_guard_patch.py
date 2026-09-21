@@ -125,19 +125,101 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
                 "suppressed_as_gain_scaled_duplicate": suppress,
             }
 
-        # Live Experimental validation showed the two public vocal labels were
-        # reversed relative to what users hear. Keep the benchmark routes intact
-        # internally, but export them under the corrected public roles.
-        public_lead = best_backing
-        public_backing = best_lead
-        duplicate_analysis = _vx_scaled_duplicate_analysis(public_lead, public_backing, vocal_sr)
+        # Do not trust separator output names to define vocal roles. Live tests
+        # showed the nominal karaoke Instrumental/secondary output can be either
+        # isolated vocal content or accompaniment depending on the source.
+        def _vx_role_evidence(candidate_audio, vocal_parent_audio, mixture_audio):
+            candidate = np.asarray(candidate_audio, dtype=np.float32)
+            vocal_parent_arr = np.asarray(vocal_parent_audio, dtype=np.float32)
+            mixture_arr = np.asarray(mixture_audio, dtype=np.float32)
+            n_role = min(len(candidate), len(vocal_parent_arr), len(mixture_arr))
+            if n_role <= 0:
+                return {
+                    "vocal_cosine": 0.0,
+                    "instrumental_cosine": 0.0,
+                    "vocal_margin": -1.0,
+                    "vocal_like": False,
+                }
+
+            candidate = candidate[:n_role]
+            vocal_parent_arr = vocal_parent_arr[:n_role]
+            mixture_arr = mixture_arr[:n_role]
+            instrumental_ref = mixture_arr - vocal_parent_arr
+
+            def _flat_mono(item):
+                arr = np.asarray(item, dtype=np.float32)
+                if arr.ndim > 1:
+                    arr = np.mean(arr, axis=1)
+                return np.asarray(arr, dtype=np.float32).reshape(-1)
+
+            candidate_mono = _flat_mono(candidate)
+            vocal_mono = _flat_mono(vocal_parent_arr)
+            instrumental_mono = _flat_mono(instrumental_ref)
+            vocal_cosine = abs(float(_cos(candidate_mono, vocal_mono)))
+            instrumental_cosine = abs(float(_cos(candidate_mono, instrumental_mono)))
+            margin = vocal_cosine - instrumental_cosine
+            vocal_like = bool(
+                vocal_cosine >= 0.16
+                and margin >= 0.035
+            )
+            return {
+                "vocal_cosine": round(vocal_cosine, 6),
+                "instrumental_cosine": round(instrumental_cosine, 6),
+                "vocal_margin": round(margin, 6),
+                "vocal_like": vocal_like,
+            }
+
+        quality_evidence = _vx_role_evidence(best_lead, sw_vocals_audio, mixture)
+        residual_evidence = _vx_role_evidence(best_backing, sw_vocals_audio, mixture)
+
+        # Keep the benchmark-preferred quality route as lead when it is genuinely
+        # vocal-like. If it looks like accompaniment, fall back to the residual
+        # route rather than exporting music under a vocal label.
+        if quality_evidence["vocal_like"]:
+            public_lead = best_lead
+            public_lead_route = "quality"
+            backing_candidate = best_backing
+            backing_evidence = residual_evidence
+            backing_route = "residual"
+        elif residual_evidence["vocal_like"]:
+            public_lead = best_backing
+            public_lead_route = "residual"
+            backing_candidate = best_lead
+            backing_evidence = quality_evidence
+            backing_route = "quality"
+        else:
+            # Both specialists are ambiguous. The residual route is constrained
+            # to the SW vocal parent, so it is the safer lead fallback.
+            public_lead = best_backing
+            public_lead_route = "residual_fallback"
+            backing_candidate = None
+            backing_evidence = quality_evidence
+            backing_route = "quality_rejected"
+
+        backing_is_vocal = bool(
+            backing_candidate is not None
+            and backing_evidence.get("vocal_like")
+        )
+        duplicate_analysis = (
+            _vx_scaled_duplicate_analysis(public_lead, backing_candidate, vocal_sr)
+            if backing_is_vocal
+            else {
+                "backing_detected": False,
+                "suppressed_as_gain_scaled_duplicate": False,
+                "reason": "rejected_as_non_vocal_or_ambiguous",
+            }
+        )
 
         lead_dest = experimental / f"{track}_lead_vocals.flac"
         backing_dest = experimental / f"{track}_backing_vocals.flac"
         _write_flac(lead_dest, public_lead, vocal_sr)
         vocal_files = [lead_dest.name]
-        if duplicate_analysis["backing_detected"]:
-            _write_flac(backing_dest, public_backing, vocal_sr)
+        backing_exported = bool(
+            backing_is_vocal
+            and duplicate_analysis.get("backing_detected")
+        )
+        if backing_exported:
+            _write_flac(backing_dest, backing_candidate, vocal_sr)
             vocal_files.append(backing_dest.name)
 
         fast_rebuilt = fast_lead + best_backing
@@ -154,13 +236,21 @@ new = '''        lead_n = min(len(quality_lead), blend_n)
             "benchmark_id": "vocal_benchmark_v1",
             "files": vocal_files,
             "parent_recipe": "BS-RoFormer-SW vocals",
-            "lead_recipe": "corrected public role: SW vocals - fast SW->Becruily karaoke secondary/Instrumental",
-            "backing_recipe": "corrected public role: 25% SW + 75% MelBand Becruily vocal parent -> Becruily karaoke secondary/Instrumental",
-            "public_role_correction": "live_validation_swap_v1",
-            "backing_detected": bool(duplicate_analysis["backing_detected"]),
+            "lead_recipe": public_lead_route,
+            "backing_recipe": backing_route,
+            "public_role_correction": "acoustic_role_validation_v2",
+            "vocal_role_evidence": {
+                "quality": quality_evidence,
+                "residual": residual_evidence,
+            },
+            "backing_detected": bool(backing_exported),
             "backing_suppressed_reason": (
-                None if duplicate_analysis["backing_detected"]
-                else "gain_scaled_duplicate_of_lead"
+                None if backing_exported
+                else (
+                    "gain_scaled_duplicate_of_lead"
+                    if backing_is_vocal and duplicate_analysis.get("suppressed_as_gain_scaled_duplicate")
+                    else "rejected_as_non_vocal_or_ambiguous"
+                )
             ),
             "backing_duplicate_analysis": duplicate_analysis,
             "best_stems_share_single_parent_pair": False,
