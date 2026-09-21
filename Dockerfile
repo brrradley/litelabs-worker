@@ -210,6 +210,9 @@ assert '0.75 * np.asarray(alt_vocals_audio' in source
 assert 'mel_band_roformer_vocals_becruily.ckpt' in source
 assert source.count('mel_band_roformer_karaoke_becruily.ckpt') >= 2
 assert 'best_backing = fast_parent - fast_lead' in source
+assert 'def _vx_find_output(directory, role)' in source
+assert 'secondary/Instrumental' in source
+assert source.count('"secondary"') >= 2
 assert 'best_stems_share_single_parent_pair' in source
 assert 'suppressed_as_gain_scaled_duplicate' in source
 assert 'gain_scaled_duplicate_of_lead' in source
@@ -244,6 +247,12 @@ assert 'global_instrument_inventory_v1' in source
 assert 'global_inventory_reused_for_family_router' in source
 assert 'DETECTED INSTRUMENTS' in source
 assert 'essentia_research_second_opinion_v1' in source
+essentia_source = Path('/app/essentia_research.py').read_text(encoding='utf-8')
+assert 'serving_default_model_Placeholder' in essentia_source
+assert 'PartitionedCall:0' in essentia_source
+multilead_source = Path('/app/multilead_research.py').read_text(encoding='utf-8')
+assert 'model.float()' in multilead_source
+assert 'torch.autocast' not in multilead_source
 assert 'LITELABS G400 GENRE CANDIDATES' in source
 assert 'ESSENTIA GENRE CANDIDATES' not in source
 assert 'public_readme_inventory_final_v1' in source
