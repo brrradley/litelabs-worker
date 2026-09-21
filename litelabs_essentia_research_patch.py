@@ -34,10 +34,10 @@ if 'genre_probe_pre_stem_v1' not in text:
 '''
     text = text.replace(download_anchor, download_anchor + launch_block, 1)
 
-wait_anchor = '        emit("Running BS-RoFormer Parent Separation", 10)\n'
+wait_anchor = '        rc, elapsed = _run_polled(\n'
 if 'genre_probe_complete_before_stems_v1' not in text:
     if wait_anchor not in text:
-        raise RuntimeError('Could not locate pre-parent-separation genre wait anchor')
+        raise RuntimeError('Could not locate parent-separation command anchor')
     wait_block = '''        # genre_probe_complete_before_stems_v1
         try:
             probe_stdout, probe_stderr = genre_probe_process.communicate(
@@ -105,6 +105,6 @@ compile(check, str(path), 'exec')
 assert 'genre_probe_pre_stem_v1' in check
 assert 'genre_probe_complete_before_stems_v1' in check
 assert '["python", "-u", "/app/genre_probe.py", str(downloaded)]' in check
-assert check.index('genre_probe_complete_before_stems_v1') < check.index('Running BS-RoFormer Parent Separation')
+assert check.index('genre_probe_complete_before_stems_v1') < check.index('rc, elapsed = _run_polled(')
 assert '"genre_analysis": genre_report' in check
 print('LiteLABS pre-stem G400 genre integration applied')
