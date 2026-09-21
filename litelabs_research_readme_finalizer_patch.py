@@ -31,7 +31,7 @@ clean_block = '''        # public_readme_inventory_final_v1
             # This is the final README composition point before ZIP packaging.
             # Remove any earlier/legacy genre lines, then write the canonical
             # pre-stem G400 result here so it cannot be overwritten later.
-            readme_text = "\n".join(
+            readme_text = "\\n".join(
                 line
                 for line in readme_text.splitlines()
                 if not line.startswith("Detected genre:")
