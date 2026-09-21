@@ -46,6 +46,18 @@ if '        "learning_observation": learning_observation,\n' not in qa:
         raise RuntimeError('Could not locate final QA record fields anchor')
     qa = qa.replace(record_fields_anchor, record_fields_replacement, 1)
 
+# Promote detector/G400 metadata from the QA extra payload to stable top-level
+# fields so LiteRECORDS can build its public README from the same evidence.
+qa = qa.replace(
+    '    if extra:\n        record["pipeline_metrics"] = extra\n',
+    '    if extra:\n'
+    '        record["pipeline_metrics"] = extra\n'
+    '        for metadata_key in ("detected_instruments", "detected_by_family", "genre_top10", "genre_broad_families"):\n'
+    '            if metadata_key in extra:\n'
+    '                record[metadata_key] = extra[metadata_key]\n',
+    1,
+)
+
 # Keep the silent QA hierarchy aligned with the production drum output. DrumSep
 # still predicts hh+cymbals internally, but the customer-facing child is hats.
 qa = qa.replace(
