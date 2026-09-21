@@ -235,7 +235,41 @@ if 'ESSENTIA GENRE CANDIDATES' not in text:
 # Rewrite the actual QA call regardless of whitespace used by the inherited
 # production source. Standardize the replacement text so Docker guards can
 # verify the canonical G400 metadata path precisely.
-qa_genre_pattern = r'(?m)^(?P<indent>\\s*)genre\\s*=\\s*genre\\s*,\\s*
+qa_call_start = text.find('build_research_qa(')
+if qa_call_start < 0:
+    raise RuntimeError('Could not locate build_research_qa call')
+
+qa_call_end = text.find(')', qa_call_start)
+if qa_call_end < 0:
+    raise RuntimeError('Could not locate end of build_research_qa call')
+
+qa_call_text = text[qa_call_start:qa_call_end + 1]
+
+genre_pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)genre[ \t]*=[ \t]*genre[ \t]*,[ \t]*$')
+reason_pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)genre_reason[ \t]*=[ \t]*genre_reason[ \t]*,[ \t]*$')
+
+qa_call_text, qa_genre_replacements = genre_pattern.subn(
+    lambda match: f"{match.group('indent')}genre=research_genre,",
+    qa_call_text,
+    count=1,
+)
+qa_call_text, qa_reason_replacements = reason_pattern.subn(
+    lambda match: f"{match.group('indent')}genre_reason=research_genre_reason,",
+    qa_call_text,
+    count=1,
+)
+
+if qa_genre_replacements != 1:
+    raise RuntimeError(
+        f"Expected exactly one QA genre argument, replaced {qa_genre_replacements}"
+    )
+if qa_reason_replacements != 1:
+    raise RuntimeError(
+        f"Expected exactly one QA genre_reason argument, replaced {qa_reason_replacements}"
+    )
+
+text = text[:qa_call_start] + qa_call_text + text[qa_call_end + 1:]
+
 # Add merged detector/G400 evidence to the QA extra payload so downstream
 # LiteRECORDS packaging has access to the same canonical metadata.
 qa_call = text.find('build_research_qa(')
