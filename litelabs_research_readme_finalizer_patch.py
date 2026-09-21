@@ -28,6 +28,43 @@ clean_block = '''        # public_readme_inventory_final_v1
                 "wind-chimes": "Wind Chimes",
             }
 
+            # Experimental genre display follows G400 evidence. Genre remains
+            # secondary routing evidence; this only corrects the public metadata.
+            if essentia_report.get("ok") and (essentia_report.get("genre_top10") or []):
+                top_genre = (essentia_report.get("genre_top10") or [])[0]
+                genre_label = str(top_genre.get("label") or "mixed_or_unknown")
+                genre_display = genre_label.replace("---", " / ").replace("_", " ")
+                genre_reason = (
+                    "LiteLABS G400 top classification "
+                    f"(mean {float(top_genre.get('mean', 0.0)):.3f}, "
+                    f"p90 {float(top_genre.get('p90', 0.0)):.3f})"
+                )
+                readme_lines = readme_text.splitlines()
+                found_genre = False
+                found_reason = False
+                for idx, line in enumerate(readme_lines):
+                    if line.startswith("Detected genre:"):
+                        readme_lines[idx] = f"Detected genre: {genre_display}"
+                        found_genre = True
+                    elif line.startswith("Genre reason:"):
+                        readme_lines[idx] = f"Genre reason: {genre_reason}"
+                        found_reason = True
+                if not found_genre:
+                    insert_at = next(
+                        (idx + 1 for idx, line in enumerate(readme_lines) if line.startswith("Output format:")),
+                        0,
+                    )
+                    readme_lines.insert(insert_at, f"Detected genre: {genre_display}")
+                    if not found_reason:
+                        readme_lines.insert(insert_at + 1, f"Genre reason: {genre_reason}")
+                elif not found_reason:
+                    genre_idx = next(
+                        (idx for idx, line in enumerate(readme_lines) if line.startswith("Detected genre:")),
+                        0,
+                    )
+                    readme_lines.insert(genre_idx + 1, f"Genre reason: {genre_reason}")
+                readme_text = "\\n".join(readme_lines) + "\\n"
+
             public_lines = ["DETECTED INSTRUMENTS", "--------------------"]
             if detected_by_family:
                 for family, names in detected_by_family.items():
