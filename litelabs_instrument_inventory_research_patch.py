@@ -214,13 +214,13 @@ if 'DETECTED INSTRUMENTS' not in text:
                 "A detected instrument does not guarantee that an individual specialist stem was exported.",
                 "",
             ])
-            section = "\n".join(lines)
-            if "INCLUDED STEMS\n--------------" in readme_text:
-                readme_text = readme_text.replace("INCLUDED STEMS\n--------------", section + "\nINCLUDED STEMS\n--------------", 1)
+            section = "\\n".join(lines)
+            if "INCLUDED STEMS\\n--------------" in readme_text:
+                readme_text = readme_text.replace("INCLUDED STEMS\\n--------------", section + "\\nINCLUDED STEMS\\n--------------", 1)
             elif "ABOUT THIS PACK" in readme_text:
-                readme_text = readme_text.replace("ABOUT THIS PACK", section + "\nABOUT THIS PACK", 1)
+                readme_text = readme_text.replace("ABOUT THIS PACK", section + "\\nABOUT THIS PACK", 1)
             else:
-                readme_text += "\n\n" + section
+                readme_text += "\\n\\n" + section
             inventory_readme.write_text(readme_text, encoding="utf-8")
 
 '''
