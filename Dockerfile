@@ -18,6 +18,7 @@ COPY essentia_research.py /app/essentia_research.py
 COPY litelabs_multilead_research_patch.py /app/litelabs_multilead_research_patch.py
 COPY litelabs_instrument_inventory_research_patch.py /app/litelabs_instrument_inventory_research_patch.py
 COPY litelabs_essentia_research_patch.py /app/litelabs_essentia_research_patch.py
+COPY litelabs_public_readme_model_redaction_patch.py /app/litelabs_public_readme_model_redaction_patch.py
 COPY litelabs_qa_learning_hotfix.py /app/litelabs_qa_learning_hotfix.py
 COPY litelabs_build_identity_patch.py /app/litelabs_build_identity_patch.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
@@ -178,8 +179,9 @@ RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_multilead_research_patch.py \
     && python /app/litelabs_instrument_inventory_research_patch.py \
     && python /app/litelabs_essentia_research_patch.py \
+    && python /app/litelabs_public_readme_model_redaction_patch.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/research_run_experimental.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/research_run_experimental.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -238,7 +240,9 @@ assert 'global_instrument_inventory_v1' in source
 assert 'global_inventory_reused_for_family_router' in source
 assert 'DETECTED INSTRUMENTS' in source
 assert 'essentia_research_second_opinion_v1' in source
-assert 'ESSENTIA GENRE CANDIDATES' in source
+assert 'LITELABS G400 GENRE CANDIDATES' in source
+assert 'ESSENTIA GENRE CANDIDATES' not in source
+assert 'public_readme_model_redaction_v1' in source
 assert '"drums_5stem_hats" in lower' in source
 assert '_BUILD_SHA = os.getenv("LITELABS_BUILD_SHA"' in handler_source
 assert 'result.setdefault("build_sha", _BUILD_SHA)' in handler_source
