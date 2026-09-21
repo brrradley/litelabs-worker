@@ -30,28 +30,51 @@ def _aggregate(predictions: np.ndarray, classes: list[str]) -> dict[str, dict[st
     return result
 
 
+def _graph_node_names(graph_filename: Path) -> set[str]:
+    # Parse GraphDef directly so we can select the correct endpoint pair before
+    # constructing Essentia's TensorflowPredict2D. Trying invalid endpoint pairs
+    # in sequence can leave the native TensorFlow wrapper in a bad state.
+    import tensorflow as tf
+
+    graph_def = tf.compat.v1.GraphDef()
+    graph_def.ParseFromString(graph_filename.read_bytes())
+    return {str(node.name) for node in graph_def.node}
+
+
 def _make_classifier(graph_filename: Path):
     from essentia.standard import TensorflowPredict2D
 
-    candidates = (
-        ("serving_default_model_Placeholder", "PartitionedCall"),
-        ("serving_default_model_Placeholder", "PartitionedCall:0"),
-        ("model/Placeholder", "model/Sigmoid"),
-    )
-    errors = []
-    for input_name, output_name in candidates:
-        try:
-            return TensorflowPredict2D(
-                graphFilename=str(graph_filename),
-                input=input_name,
-                output=output_name,
+    nodes = _graph_node_names(graph_filename)
+    if (
+        "serving_default_model_Placeholder" in nodes
+        and "PartitionedCall" in nodes
+    ):
+        input_name = "serving_default_model_Placeholder"
+        output_name = "PartitionedCall"
+    elif (
+        "model/Placeholder" in nodes
+        and "model/Sigmoid" in nodes
+    ):
+        input_name = "model/Placeholder"
+        output_name = "model/Sigmoid"
+    else:
+        interesting = sorted(
+            name for name in nodes
+            if (
+                "Placeholder" in name
+                or "PartitionedCall" in name
+                or "Sigmoid" in name
             )
-        except RuntimeError as exc:
-            errors.append(f"{input_name} -> {output_name}: {exc}")
+        )
+        raise RuntimeError(
+            "Unsupported Essentia classifier graph layout: "
+            + ", ".join(interesting[:24])
+        )
 
-    raise RuntimeError(
-        "Could not configure Essentia classifier graph with any supported "
-        "endpoint layout:\n" + "\n".join(errors)
+    return TensorflowPredict2D(
+        graphFilename=str(graph_filename),
+        input=input_name,
+        output=output_name,
     )
 
 
