@@ -26,20 +26,10 @@ if 'public_readme_model_redaction_v1' not in text:
         raise RuntimeError('Could not locate experimental README model list')
     text = text.replace(old, new, 1)
 
-# Never expose the third-party classifier name in the user-facing README.
-text = text.replace(
-    'genre_lines = ["ESSENTIA GENRE CANDIDATES", "-------------------------"]',
-    'genre_lines = ["LITELABS G400 GENRE CANDIDATES", "-----------------------------"]',
-)
-text = text.replace(
-    '# Add Essentia genre candidates to the README without overriding the existing',
-    '# Add LiteLABS G400 genre candidates to the README without overriding the existing',
-)
-
 path.write_text(text, encoding='utf-8')
 
 check = path.read_text(encoding='utf-8')
+compile(check, str(path), 'exec')
 assert 'public_readme_model_redaction_v1' in check
-assert 'LITELABS G400 GENRE CANDIDATES' in check
 assert 'ESSENTIA GENRE CANDIDATES' not in check
 print('LiteLABS public README model names redacted')
