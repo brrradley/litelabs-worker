@@ -232,44 +232,6 @@ if 'ESSENTIA GENRE CANDIDATES' not in text:
         raise RuntimeError('Could not locate README inventory section join')
     text = text.replace(end_marker, replacement, 1)
 
-# Rewrite the actual QA call regardless of whitespace used by the inherited
-# production source. Standardize the replacement text so Docker guards can
-# verify the canonical G400 metadata path precisely.
-qa_call_start = text.find('build_research_qa(')
-if qa_call_start < 0:
-    raise RuntimeError('Could not locate build_research_qa call')
-
-qa_call_end = text.find(')', qa_call_start)
-if qa_call_end < 0:
-    raise RuntimeError('Could not locate end of build_research_qa call')
-
-qa_call_text = text[qa_call_start:qa_call_end + 1]
-
-genre_pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)genre[ \t]*=[ \t]*genre[ \t]*,[ \t]*$')
-reason_pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)genre_reason[ \t]*=[ \t]*genre_reason[ \t]*,[ \t]*$')
-
-qa_call_text, qa_genre_replacements = genre_pattern.subn(
-    lambda match: f"{match.group('indent')}genre=research_genre,",
-    qa_call_text,
-    count=1,
-)
-qa_call_text, qa_reason_replacements = reason_pattern.subn(
-    lambda match: f"{match.group('indent')}genre_reason=research_genre_reason,",
-    qa_call_text,
-    count=1,
-)
-
-if qa_genre_replacements != 1:
-    raise RuntimeError(
-        f"Expected exactly one QA genre argument, replaced {qa_genre_replacements}"
-    )
-if qa_reason_replacements != 1:
-    raise RuntimeError(
-        f"Expected exactly one QA genre_reason argument, replaced {qa_reason_replacements}"
-    )
-
-text = text[:qa_call_start] + qa_call_text + text[qa_call_end + 1:]
-
 # Add merged detector/G400 evidence to the QA extra payload so downstream
 # LiteRECORDS packaging has access to the same canonical metadata.
 qa_call = text.find('build_research_qa(')
@@ -278,6 +240,8 @@ if qa_call >= 0:
     if extra_pos >= 0:
         insert_pos = extra_pos + len('extra={')
         qa_extra = (
+            '\n                "detected_genre": research_genre,'
+            '\n                "genre_reason": research_genre_reason,'
             '\n                "detected_instruments": sorted(detected_instruments),'
             '\n                "detected_by_family": detected_by_family,'
             '\n                "genre_top10": list(essentia_report.get("genre_top10") or [])[:10],'
@@ -292,7 +256,5 @@ check = path.read_text(encoding='utf-8')
 assert 'essentia_research_second_opinion_v1' in check
 assert '"essentia": essentia_report' in check
 assert 'ESSENTIA GENRE CANDIDATES' in check
-assert 'genre=research_genre,' in check
-assert 'genre_reason=research_genre_reason,' in check
 print('LiteLABS Essentia second-opinion inventory + genre research patch applied')
 
