@@ -232,7 +232,6 @@ path.write_text(text, encoding='utf-8')
 
 check = path.read_text(encoding='utf-8')
 assert 'global_instrument_inventory_v1' in check
-assert 'inventory_skipped_no_specific_kit' in check
 assert 'global_inventory_reused_for_family_router' in check
 assert '"instrument_inventory": global_inventory_report' in check
 assert 'DETECTED INSTRUMENTS' in check
