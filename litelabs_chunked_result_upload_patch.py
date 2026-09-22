@@ -90,29 +90,26 @@ def replace_upload_block(path: Path, helper_marker: str, mode: str) -> None:
     text = path.read_text(encoding='utf-8')
     text = add_helper(text, helper_marker)
 
-    start_marker = '        uploaded = False\n        archive_size_bytes = archive.stat().st_size\n'
+    put_marker = '        put_url = str(payload.get("result_put_url") or "").strip()\n'
     end_marker = '        timings["total"] = round(time.monotonic() - started, 3)\n'
     complete_marker = '        emit("Stem Extraction Complete", 100)\n'
 
-    start = text.find(start_marker)
+    start = text.find(put_marker)
     if start < 0:
-        raise RuntimeError(f'Could not locate patched result upload start in {path}')
+        raise RuntimeError(f'Could not locate result upload URL block in {path}')
 
     complete = text.find(complete_marker, start)
     if complete < 0:
         raise RuntimeError(f'Could not locate completion marker after result upload in {path}')
 
-    # The long-job safety patch also writes timings["total"] inside its 413
-    # error branch. We need the final, outer timing assignment immediately
-    # before "Stem Extraction Complete", not that nested assignment.
     end = text.rfind(end_marker, start, complete)
     if end < 0:
-        raise RuntimeError(f'Could not locate final patched result upload end in {path}')
+        raise RuntimeError(f'Could not locate final result upload timing marker in {path}')
 
     if mode == 'experimental':
-        replacement = '''        uploaded = False\n        archive_size_bytes = archive.stat().st_size\n        print(f"LiteLABS result archive ready: {archive.name} ({archive_size_bytes} bytes)", flush=True)\n        put_url = str(payload.get("result_put_url") or "").strip()\n        if put_url:\n            emit("Uploading Stem Pack", 96)\n            upload_result = _litelabs_upload_archive(archive, put_url, payload, archive_size_bytes)\n            if int(upload_result.get("status_code") or 0) == 413:\n                timings["total"] = round(time.monotonic() - started, 3)\n                emit("Stem pack exceeds storage upload limit", 100)\n                return _json_safe({\n                    "ok": False,\n                    "mode": MODE,\n                    "failed_stage": "result_upload",\n                    "error_code": "result_too_large",\n                    "http_status": 413,\n                    "archive_name": archive.name,\n                    "archive_size_bytes": archive_size_bytes,\n                    "uploaded": False,\n                    "result_url": None,\n                    "timings_seconds": timings,\n                })\n            uploaded = bool(upload_result.get("uploaded"))\n\n'''
+        replacement = '''        archive_size_bytes = archive.stat().st_size\n        print(f"LiteLABS result archive ready: {archive.name} ({archive_size_bytes} bytes)", flush=True)\n        put_url = str(payload.get("result_put_url") or "").strip()\n        if put_url:\n            emit("Uploading Stem Pack", 96)\n            upload_result = _litelabs_upload_archive(archive, put_url, payload, archive_size_bytes)\n            if int(upload_result.get("status_code") or 0) == 413:\n                timings["total"] = round(time.monotonic() - started, 3)\n                emit("Stem pack exceeds storage upload limit", 100)\n                return _json_safe({\n                    "ok": False,\n                    "mode": MODE,\n                    "failed_stage": "result_upload",\n                    "error_code": "result_too_large",\n                    "http_status": 413,\n                    "archive_name": archive.name,\n                    "archive_size_bytes": archive_size_bytes,\n                    "uploaded": False,\n                    "result_url": None,\n                    "timings_seconds": timings,\n                })\n            uploaded = bool(upload_result.get("uploaded"))\n\n'''
     elif mode == 'parent':
-        replacement = '''        uploaded = False\n        archive_size_bytes = archive.stat().st_size\n        print(f"LiteLABS result archive ready: {archive.name} ({archive_size_bytes} bytes)", flush=True)\n        put_url = str(payload.get("result_put_url") or "").strip()\n        if put_url:\n            emit("Uploading Stem Pack", 95)\n            upload_result = _litelabs_upload_archive(archive, put_url, payload, archive_size_bytes)\n            if int(upload_result.get("status_code") or 0) == 413:\n                timings["total"] = round(time.monotonic() - started, 3)\n                emit("Stem pack exceeds storage upload limit", 100)\n                return {\n                    "ok": False,\n                    "mode": "preset_pack",\n                    "preset": preset,\n                    "failed_stage": "result_upload",\n                    "error_code": "result_too_large",\n                    "http_status": 413,\n                    "archive_name": archive.name,\n                    "archive_size_bytes": archive_size_bytes,\n                    "uploaded": False,\n                    "result_url": None,\n                    "research_qa": research_qa,\n                    "timings_seconds": timings,\n                }\n            uploaded = bool(upload_result.get("uploaded"))\n\n'''
+        replacement = '''        archive_size_bytes = archive.stat().st_size\n        print(f"LiteLABS result archive ready: {archive.name} ({archive_size_bytes} bytes)", flush=True)\n        put_url = str(payload.get("result_put_url") or "").strip()\n        if put_url:\n            emit("Uploading Stem Pack", 95)\n            upload_result = _litelabs_upload_archive(archive, put_url, payload, archive_size_bytes)\n            if int(upload_result.get("status_code") or 0) == 413:\n                timings["total"] = round(time.monotonic() - started, 3)\n                emit("Stem pack exceeds storage upload limit", 100)\n                return {\n                    "ok": False,\n                    "mode": "preset_pack",\n                    "preset": preset,\n                    "failed_stage": "result_upload",\n                    "error_code": "result_too_large",\n                    "http_status": 413,\n                    "archive_name": archive.name,\n                    "archive_size_bytes": archive_size_bytes,\n                    "uploaded": False,\n                    "result_url": None,\n                    "research_qa": research_qa,\n                    "timings_seconds": timings,\n                }\n            uploaded = bool(upload_result.get("uploaded"))\n\n'''
     else:
         raise ValueError(mode)
 
