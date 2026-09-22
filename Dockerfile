@@ -28,6 +28,7 @@ COPY litelabs_essentia_research_patch.py /app/litelabs_essentia_research_patch.p
 COPY litelabs_public_readme_model_redaction_patch.py /app/litelabs_public_readme_model_redaction_patch.py
 COPY litelabs_research_readme_finalizer_patch.py /app/litelabs_research_readme_finalizer_patch.py
 COPY litelabs_experimental_pack_only_patch.py /app/litelabs_experimental_pack_only_patch.py
+COPY litelabs_runtime_optimizations_patch.py /app/litelabs_runtime_optimizations_patch.py
 COPY litelabs_qa_learning_hotfix.py /app/litelabs_qa_learning_hotfix.py
 COPY litelabs_build_identity_patch.py /app/litelabs_build_identity_patch.py
 COPY benchmarks/vocal_benchmark_v1.json /app/benchmarks/vocal_benchmark_v1.json
@@ -263,10 +264,11 @@ RUN python /app/litelabs_drum_hats_compat_patch.py \
     && python /app/litelabs_public_readme_model_redaction_patch.py \
     && python /app/litelabs_research_readme_finalizer_patch.py \
     && python /app/litelabs_experimental_pack_only_patch.py \
+    && python /app/litelabs_runtime_optimizations_patch.py \
     && python /app/litelabs_genre_probe_handler_patch.py \
     && python /app/litelabs_instrument_probe_handler_patch.py \
     && python /app/litelabs_build_identity_patch.py \
-    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_experimental_pack_only_patch.py /app/litelabs_genre_probe_handler_patch.py /app/litelabs_instrument_probe_handler_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
+    && python -m py_compile /app/handler.py /app/experimental_children_v1.py /app/preset_pack.py /app/qa_research.py /app/litelabs_drum_hats_compat_patch.py /app/litelabs_locked_vocal_hats_patch.py /app/litelabs_vocal_duplicate_guard_patch.py /app/multilead_research.py /app/essentia_research.py /app/litelabs_multilead_research_patch.py /app/litelabs_instrument_inventory_research_patch.py /app/litelabs_essentia_research_patch.py /app/litelabs_public_readme_model_redaction_patch.py /app/litelabs_research_readme_finalizer_patch.py /app/litelabs_experimental_pack_only_patch.py /app/litelabs_runtime_optimizations_patch.py /app/litelabs_genre_probe_handler_patch.py /app/litelabs_instrument_probe_handler_patch.py /app/litelabs_qa_learning_hotfix.py /app/litelabs_build_identity_patch.py \
     && python - <<'PY'
 from pathlib import Path
 import json
@@ -353,6 +355,12 @@ assert '_parent_plus_experimental.zip' not in source
 assert 'root_parent_files' not in source
 assert 'experimental = final / "experimental"' not in source
 assert 'track = track[:-17]' in source
+assert 'fast_qa_collector_v1' in source
+assert 'public_parent_cleanup_v1' in source
+assert 'timings["research_qa"]' in source
+assert 'timings["package_zip"]' in source
+assert 'timings["upload"]' in source
+assert 'QA_SAMPLE_SECONDS = 60.0' in qa_source
 assert '"drums_5stem_hats" in lower' in source
 assert 'f"{track}_drums_5stem_{name}.flac"' not in source
 assert 'f"{track}_{name}.flac"' in source
