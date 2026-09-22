@@ -108,10 +108,33 @@ if 'validated_instrument_router_reused_v2' not in text:
 '''
     text = text[:start] + replacement + text[end:]
 
-# Keep the existing residual-inventory block structurally intact for now.
-# The expensive global Mega53 detector has already been removed. A separate,
-# source-scoped change will remove this residual research pass after the fast
-# production path is green, avoiding another brittle cross-block text splice.
+# Disable the remaining residual Mega53 research pass without deleting any
+# inherited source block. We locate the exact residual stage, then replace only
+# its immediately enclosing 8-space if-condition with "if False:" so the whole
+# block remains syntactically intact but cannot run in production.
+if 'residual_inventory_fast_skip_v3' not in text:
+    residual_stage = '        emit("Analysing Residual Instruments", 83)\n'
+    stage_pos = text.find(residual_stage)
+    if stage_pos >= 0:
+        search_start = max(0, stage_pos - 1200)
+        prefix = text[search_start:stage_pos]
+        if_pos_rel = prefix.rfind('\n        if ')
+        if if_pos_rel < 0:
+            raise RuntimeError(
+                'Could not locate enclosing residual-inventory condition'
+            )
+        if_pos = search_start + if_pos_rel + 1
+        if_end = text.find('\n', if_pos)
+        original_if = text[if_pos:if_end]
+        if not original_if.startswith('        if '):
+            raise RuntimeError(
+                f'Unexpected residual-inventory guard: {original_if!r}'
+            )
+        text = (
+            text[:if_pos]
+            + '        if False:  # residual_inventory_fast_skip_v3'
+            + text[if_end:]
+        )
 
 # Keep the fast detector evidence in the technical report under the established
 # field name used by QA/admin tooling.
@@ -133,4 +156,5 @@ assert 'validated_instrument_router_v2' in check
 assert 'validated_instrument_router_reused_v2' in check
 assert '"instrument_inventory": global_inventory_report' in check
 assert 'Analysing Instrument Inventory' not in check
+assert 'residual_inventory_fast_skip_v3' in check
 print('LiteLABS validated Inst-MTG fast router applied')
