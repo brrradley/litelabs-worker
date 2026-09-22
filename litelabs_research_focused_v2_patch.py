@@ -70,7 +70,7 @@ def _focused_drumsep(parent: Path, root: Path, timeout: int) -> dict:
     child_sum = np.sum(np.stack([loaded[name][:n] for name in DRUM5], axis=0), axis=0)
     residual = parent_audio - child_sum
     result['quality'] = {
-        'parent_vs_children_sum_cosine': round(float(_cos(parent_audio, child_sum)), 8),
+        'parent_vs_children_sum_cosine': round(float(_cos(parent_audio.reshape(-1), child_sum.reshape(-1))), 8),
         'residual_relative_to_parent_db': round(_db_ratio(residual, parent_audio), 3),
     }
     result['children'] = {name: _stats(paths[name]) for name in DRUM5}
