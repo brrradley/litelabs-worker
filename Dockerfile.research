@@ -1,0 +1,71 @@
+FROM ghcr.io/brrradley/litelabs-worker:dc2ef73ab4f28452337100fc79250f27d3ec5272
+
+ARG LITELABS_BUILD_SHA=unknown
+ENV LITELABS_BUILD_SHA=${LITELABS_BUILD_SHA} \
+    AUDIO_SEPARATOR_MODEL_DIR=/models/audio_separator
+
+WORKDIR /app
+
+# Research image deliberately rides current public inference tooling. Production
+# remains pinned until a candidate has passed the benchmark and listening gate.
+RUN python -m pip install --no-cache-dir --upgrade \
+        "torch==2.6.0" "torchaudio==2.6.0" "torchvision==0.21.0" \
+    && python -m pip install --no-cache-dir --upgrade \
+        "audio-separator==0.47.0" "bs-roformer-infer" "asteroid==0.7.0" \
+    && python - <<'PY'
+import importlib.metadata as md
+import torch
+print('research torch', torch.__version__, 'cuda', torch.version.cuda)
+print('research audio-separator', md.version('audio-separator'))
+print('research bs-roformer-infer', md.version('bs-roformer-infer'))
+assert tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2]) >= (2, 6)
+assert md.version('audio-separator') == '0.47.0'
+PY
+
+# Bake the public challengers through audio-separator's own registry/download
+# path so config + weight pairing is the same code path used by the benchmark.
+RUN mkdir -p /models/audio_separator \
+    && audio-separator --model_file_dir /models/audio_separator \
+        --model_filename model_bs_roformer_ep_317_sdr_12.9755.ckpt --download_model_only \
+    && audio-separator --model_file_dir /models/audio_separator \
+        --model_filename bs_roformer_karaoke_anvuew.ckpt --download_model_only \
+    && audio-separator --model_file_dir /models/audio_separator \
+        --model_filename mel_band_roformer_karaoke_becruily.ckpt --download_model_only
+
+# UNMIXX replaces the MedleyVox research direction. Keep this isolated to the
+# research image until licensing and production behaviour are both cleared.
+RUN rm -rf /opt/unmixx /opt/medleyvox /models/medleyvox \
+    && git clone https://github.com/jihoojung0106/unmixx.git /opt/unmixx \
+    && cd /opt/unmixx \
+    && git checkout 8e750521b5942f4717656cac86a23cf0bd90dea5 \
+    && test -s /opt/unmixx/ckpt/best.ckpt \
+    && test -s /opt/unmixx/ckpt/conf.yml \
+    && PYTHONPATH=/opt/unmixx python - <<'PY'
+import torch
+import yaml
+import look2hear.models
+from pathlib import Path
+cfg = yaml.safe_load(Path('/opt/unmixx/ckpt/conf.yml').read_text())
+assert cfg['audionet']['audionet_name'] == 'UNMIXX'
+assert hasattr(look2hear.models, 'UNMIXX')
+print('UNMIXX research checkpoint/import verified')
+PY
+
+COPY research_benchmark_v2.py /app/research_benchmark_v2.py
+COPY litelabs_research_benchmark_handler_patch.py /app/litelabs_research_benchmark_handler_patch.py
+
+RUN python /app/litelabs_research_benchmark_handler_patch.py \
+    && python -m py_compile /app/handler.py /app/research_benchmark_v2.py \
+    && python - <<'PY'
+from pathlib import Path
+source = Path('/app/handler.py').read_text(encoding='utf-8')
+assert 'mode == "research_benchmark_v2"' in source
+for path in (
+    '/models/audio_separator/model_bs_roformer_ep_317_sdr_12.9755.ckpt',
+    '/models/audio_separator/bs_roformer_karaoke_anvuew.ckpt',
+    '/models/audio_separator/mel_band_roformer_karaoke_becruily.ckpt',
+    '/opt/unmixx/ckpt/best.ckpt',
+):
+    assert Path(path).is_file() and Path(path).stat().st_size > 0, path
+print('LiteLABS research benchmark image verified')
+PY
