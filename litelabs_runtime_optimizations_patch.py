@@ -100,17 +100,16 @@ exp = exp_path.read_text(encoding='utf-8')
 # was loaded twice under different labels. Build parent QA references directly
 # from the internal RoFormer stem paths and scan the public directory only for
 # actual child/specialist outputs.
-collector_start = '''        qa_stems: dict[str, Path] = {}
-        qa_models: dict[str, str] = {}
+collector_end = '        qa_pipeline_metrics = {}\n'
+end = exp.find(collector_end)
+if end < 0:
+    raise RuntimeError('Could not locate experimental QA metrics anchor')
 
-        def add_qa_stem(label: str, candidate: Path, model: str) -> None:
-'''
-collector_end = '''        qa_pipeline_metrics = {}
-'''
-start = exp.find(collector_start)
-end = exp.find(collector_end, start)
-if start < 0 or end < 0:
-    raise RuntimeError('Could not locate experimental QA collector block')
+# Locate the collector structurally rather than relying on its exact contents;
+# earlier production patches legitimately rewrite model labels inside this block.
+start = exp.rfind('        qa_stems:', 0, end)
+if start < 0:
+    raise RuntimeError('Could not locate experimental QA collector start')
 
 lean_collector = '''        # fast_qa_collector_v1
         qa_stems: dict[str, Path] = {}
