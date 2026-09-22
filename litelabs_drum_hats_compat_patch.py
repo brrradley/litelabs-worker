@@ -58,7 +58,7 @@ else:
         f'{i1}"residual_relative_to_parent_db": _db(merged_residual_rms / max(parent_rms, 1e-12)),\n'
         f'{indent}}}\n'
         f'{indent}for name, audio in final_children.items():\n'
-        f'{i1}dest = experimental / f"{{track}}_drums_5stem_{{name}}.flac"\n'
+        f'{i1}dest = experimental / f"{{track}}_{{name}}.flac"\n'
         f'{i1}_write_flac(dest, audio, drum_sr)\n'
         f'{i1}drum_report["files"].append(dest.name)\n'
         f'{indent}timings["drum_hats_merge_and_encode"] = round(time.monotonic() - merge_started, 3)\n'
