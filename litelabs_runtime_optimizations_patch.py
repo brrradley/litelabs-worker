@@ -132,8 +132,8 @@ cleanup_block = '''        # public_parent_cleanup_v1
 if 'public_parent_cleanup_v1' not in exp:
     exp = exp[:pack_pos] + cleanup_block + exp[pack_pos:]
 
-# Add timings around QA, packaging and upload so the next run accounts for all
-# wall time instead of leaving ~minutes unexplained.
+# Add timings around QA and packaging so the next run accounts for the
+# previously invisible post-separation work without touching extraction quality.
 qa_call = '        research_qa = build_research_qa(\n'
 if qa_call in exp and 'qa_started = time.monotonic()' not in exp:
     exp = exp.replace(
@@ -166,22 +166,6 @@ if package_line in exp and 'package_started = time.monotonic()' not in exp:
             1,
         )
 
-put_if = '        if put_url:\n'
-if put_if in exp and 'upload_started = time.monotonic()' not in exp:
-    exp = exp.replace(
-        put_if,
-        put_if + '            upload_started = time.monotonic()\n',
-        1,
-    )
-    uploaded_anchor = '            uploaded = True\n'
-    if uploaded_anchor in exp:
-        exp = exp.replace(
-            uploaded_anchor,
-            '            timings["upload"] = round(time.monotonic() - upload_started, 3)\n'
-            + uploaded_anchor,
-            1,
-        )
-
 exp_path.write_text(exp, encoding='utf-8')
 
 qa_check = qa_path.read_text(encoding='utf-8')
@@ -193,5 +177,4 @@ assert 'source_duration_seconds' in qa_check
 assert 'public_parent_cleanup_v1' in exp_check
 assert 'timings["research_qa"]' in exp_check
 assert 'timings["package_zip"]' in exp_check
-assert 'timings["upload"]' in exp_check
 print('LiteLABS runtime optimisation v1 applied')
