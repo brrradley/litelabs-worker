@@ -6,8 +6,8 @@ def _litelabs_upload_archive(archive, put_url: str, payload: dict, archive_size_
     """Upload a result archive with retry-safe chunks by default.
 
     Large single PUTs to the LiteRECORDS receiver can sit behind the web stack
-    long enough to hit its request timeout.  Chunked POSTs are therefore the
-    production default.  ``result_upload_mode=single`` remains available only
+    long enough to hit its request timeout. Chunked POSTs are therefore the
+    production default. ``result_upload_mode=single`` remains available only
     as an explicit diagnostic override.
     """
     import math
@@ -88,17 +88,28 @@ def _litelabs_upload_archive(archive, put_url: str, payload: dict, archive_size_
 '''
 
 
-def add_helper(text: str, marker: str) -> str:
-    if 'def _litelabs_upload_archive(' in text:
-        return text
-    if marker not in text:
+def install_helper(text: str, marker: str) -> str:
+    """Install the current helper even when the inherited image has an older one."""
+    marker_pos = text.find(marker)
+    if marker_pos < 0:
         raise RuntimeError(f'Could not locate helper insertion marker: {marker!r}')
-    return text.replace(marker, HELPER + '\n\n' + marker, 1)
+
+    helper_pos = text.find('def _litelabs_upload_archive(')
+    if helper_pos >= 0 and helper_pos < marker_pos:
+        # Previous production images may already contain an older version of
+        # the helper. Replace the whole inherited helper region instead of
+        # silently keeping stale single-PUT/default behaviour.
+        return text[:helper_pos] + HELPER.lstrip('\n') + '\n\n' + text[marker_pos:]
+
+    if helper_pos >= 0:
+        raise RuntimeError('Found result upload helper after expected insertion marker')
+
+    return text[:marker_pos] + HELPER + '\n\n' + text[marker_pos:]
 
 
 def replace_upload_block(path: Path, helper_marker: str, mode: str) -> None:
     text = path.read_text(encoding='utf-8')
-    text = add_helper(text, helper_marker)
+    text = install_helper(text, helper_marker)
 
     put_marker = '        put_url = str(payload.get("result_put_url") or "").strip()\n'
     end_marker = '        timings["total"] = round(time.monotonic() - started, 3)\n'
