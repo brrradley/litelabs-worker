@@ -354,6 +354,8 @@ assert 'root_parent_files' not in source
 assert 'experimental = final / "experimental"' not in source
 assert 'track = track[:-17]' in source
 assert '"drums_5stem_hats" in lower' in source
+assert 'f"{track}_drums_5stem_{name}.flac"' not in source
+assert 'f"{track}_{name}.flac"' in source
 assert 'experimental_children_v1' in handler_source
 assert 'genre_probe_handler_v1' in handler_source
 assert 'instrument_probe_handler_v1' in handler_source
