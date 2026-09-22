@@ -28,20 +28,15 @@ assert md.version('setuptools') == '80.9.0'
 assert pkg_resources is not None
 PY
 
-# Bake every public challenger selected for the consolidated shootout through
-# audio-separator's registry so configs and checkpoints stay correctly paired.
+# Keep only the lead/back candidates that remain in the focused shootout.
 RUN mkdir -p /models/audio_separator \
-    && audio-separator --model_file_dir /models/audio_separator \
-        --model_filename model_bs_roformer_ep_317_sdr_12.9755.ckpt --download_model_only \
-    && audio-separator --model_file_dir /models/audio_separator \
-        --model_filename vocals_mel_band_roformer.ckpt --download_model_only \
     && audio-separator --model_file_dir /models/audio_separator \
         --model_filename bs_roformer_karaoke_anvuew.ckpt --download_model_only \
     && audio-separator --model_file_dir /models/audio_separator \
         --model_filename mel_band_roformer_karaoke_becruily.ckpt --download_model_only
 
-# UNMIXX replaces the MedleyVox research direction. Keep this isolated to the
-# research image until licensing and production behaviour are both cleared.
+# UNMIXX remains research-only. The focused benchmark now runs it in bounded
+# chunks with overlap so full-song VRAM use cannot scale with track duration.
 RUN rm -rf /opt/unmixx /opt/medleyvox /models/medleyvox \
     && git clone https://github.com/jihoojung0106/unmixx.git /opt/unmixx \
     && cd /opt/unmixx \
@@ -60,26 +55,27 @@ print('UNMIXX research checkpoint/import verified')
 PY
 
 COPY research_benchmark_v2.py /app/research_benchmark_v2.py
-COPY litelabs_research_full_matrix_patch.py /app/litelabs_research_full_matrix_patch.py
 COPY litelabs_research_benchmark_handler_patch.py /app/litelabs_research_benchmark_handler_patch.py
+COPY litelabs_research_focused_v2_patch.py /app/litelabs_research_focused_v2_patch.py
 
-RUN python /app/litelabs_research_full_matrix_patch.py \
-    && python /app/litelabs_research_benchmark_handler_patch.py \
-    && python -m py_compile /app/handler.py /app/research_benchmark_v2.py \
+RUN python /app/litelabs_research_benchmark_handler_patch.py \
+    && python /app/litelabs_research_focused_v2_patch.py \
+    && python -m py_compile /app/handler.py /app/research_benchmark_v2.py /app/litelabs_research_focused_v2_patch.py \
     && python - <<'PY'
 from pathlib import Path
 source = Path('/app/handler.py').read_text(encoding='utf-8')
 benchmark = Path('/app/research_benchmark_v2.py').read_text(encoding='utf-8')
 assert 'mode == "research_benchmark_v2"' in source
-assert '# litelabs_research_full_matrix_v1' in benchmark
-assert 'vocal_parent_kimberley' in benchmark
+assert '# litelabs_research_focused_v2' in benchmark
+assert '_run_research_benchmark_single = _run_research_benchmark_focused' in benchmark
+assert 'lead_back_anvuew_autocast_compile' in benchmark
+assert 'unmixx_chunked' in benchmark
+assert 'drumsep_current' in benchmark
 for path in (
-    '/models/audio_separator/model_bs_roformer_ep_317_sdr_12.9755.ckpt',
-    '/models/audio_separator/vocals_mel_band_roformer.ckpt',
     '/models/audio_separator/bs_roformer_karaoke_anvuew.ckpt',
     '/models/audio_separator/mel_band_roformer_karaoke_becruily.ckpt',
     '/opt/unmixx/ckpt/best.ckpt',
 ):
     assert Path(path).is_file() and Path(path).stat().st_size > 0, path
-print('LiteLABS research benchmark image verified')
+print('LiteLABS focused research benchmark image verified')
 PY
