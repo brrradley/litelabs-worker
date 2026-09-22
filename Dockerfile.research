@@ -11,7 +11,7 @@ WORKDIR /app
 RUN python -m pip install --no-cache-dir --upgrade \
         "torch==2.6.0" "torchaudio==2.6.0" "torchvision==0.21.0" \
     && python -m pip install --no-cache-dir --upgrade \
-        "audio-separator==0.47.0" "bs-roformer-infer" "asteroid==0.7.0" \
+        "audio-separator==0.47.0" "bs-roformer-infer" "asteroid==0.7.0" "torch-complex==0.4.4" \
     && python - <<'PY'
 import importlib.metadata as md
 import torch
@@ -20,13 +20,16 @@ print('research audio-separator', md.version('audio-separator'))
 print('research bs-roformer-infer', md.version('bs-roformer-infer'))
 assert tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2]) >= (2, 6)
 assert md.version('audio-separator') == '0.47.0'
+assert md.version('torch-complex') == '0.4.4'
 PY
 
-# Bake the public challengers through audio-separator's own registry/download
-# path so config + weight pairing is the same code path used by the benchmark.
+# Bake every public challenger selected for the consolidated shootout through
+# audio-separator's registry so configs and checkpoints stay correctly paired.
 RUN mkdir -p /models/audio_separator \
     && audio-separator --model_file_dir /models/audio_separator \
         --model_filename model_bs_roformer_ep_317_sdr_12.9755.ckpt --download_model_only \
+    && audio-separator --model_file_dir /models/audio_separator \
+        --model_filename vocals_mel_band_roformer.ckpt --download_model_only \
     && audio-separator --model_file_dir /models/audio_separator \
         --model_filename bs_roformer_karaoke_anvuew.ckpt --download_model_only \
     && audio-separator --model_file_dir /models/audio_separator \
@@ -62,6 +65,7 @@ source = Path('/app/handler.py').read_text(encoding='utf-8')
 assert 'mode == "research_benchmark_v2"' in source
 for path in (
     '/models/audio_separator/model_bs_roformer_ep_317_sdr_12.9755.ckpt',
+    '/models/audio_separator/vocals_mel_band_roformer.ckpt',
     '/models/audio_separator/bs_roformer_karaoke_anvuew.ckpt',
     '/models/audio_separator/mel_band_roformer_karaoke_becruily.ckpt',
     '/opt/unmixx/ckpt/best.ckpt',
