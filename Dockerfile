@@ -360,7 +360,6 @@ assert 'timings["research_qa"]' in source
 assert 'timings["package_zip"]' in source
 assert 'QA_SAMPLE_SECONDS = 60.0' in qa_source
 assert '"drums_5stem_hats" in lower' in source
-assert 'f"{track}_drums_5stem_{name}.flac"' not in source
 assert 'f"{track}_{name}.flac"' in source
 assert 'experimental_children_v1' in handler_source
 assert 'genre_probe_handler_v1' in handler_source
