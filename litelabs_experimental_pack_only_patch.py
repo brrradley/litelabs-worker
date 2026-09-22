@@ -88,30 +88,6 @@ text = text.replace(
     '"root_metadata_files": sorted(p.name for p in final.iterdir() if p.is_file()),',
 )
 
-# Keep the finished ZIP outside the per-job TemporaryDirectory so it cannot be
-# removed before the upload/return path has finished with it. Cache its size
-# before optional cleanup after a successful upload/copy.
-text = text.replace(
-    '        timings["total"] = round(time.monotonic() - started, 3)\n',
-    '        archive_size_bytes = archive.stat().st_size\n'
-    '        timings["total"] = round(time.monotonic() - started, 3)\n',
-    1,
-)
-text = text.replace(
-    '"archive_size_bytes": archive.stat().st_size,',
-    '"archive_size_bytes": archive_size_bytes,',
-    1,
-)
-return_anchor = '        emit("Stem Extraction Complete", 100)\n        return _json_safe({\n'
-if return_anchor in text:
-    text = text.replace(
-        return_anchor,
-        '        emit("Stem Extraction Complete", 100)\n'
-        '        if uploaded or local_result_path is not None:\n'
-        '            archive.unlink(missing_ok=True)\n'
-        '        return _json_safe({\n',
-        1,
-    )
 
 path.write_text(text, encoding='utf-8')
 
@@ -126,7 +102,6 @@ assert 'experimental_pack_only_v1' in check
 assert '_parent_plus_experimental.zip' not in check
 assert '_experimental_stems.zip' in check
 assert 'archive = root.parent / f"{root.name}_{track}_experimental_stems.zip"' in check
-assert '"archive_size_bytes": archive_size_bytes' in check
 assert 'Packaging Experimental Stems' in check
 assert 'root_parent_files' not in check
 assert 'experimental = final / "experimental"' not in check
