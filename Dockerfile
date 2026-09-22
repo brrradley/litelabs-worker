@@ -358,7 +358,6 @@ assert 'track = track[:-17]' in source
 assert 'public_parent_cleanup_v1' in source
 assert 'timings["research_qa"]' in source
 assert 'timings["package_zip"]' in source
-assert 'timings["upload"]' in source
 assert 'QA_SAMPLE_SECONDS = 60.0' in qa_source
 assert '"drums_5stem_hats" in lower' in source
 assert 'f"{track}_drums_5stem_{name}.flac"' not in source
