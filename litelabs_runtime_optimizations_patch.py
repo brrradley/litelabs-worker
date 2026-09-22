@@ -166,11 +166,11 @@ if package_line in exp and 'package_started = time.monotonic()' not in exp:
             1,
         )
 
-put_anchor = '            with archive.open("rb") as handle:\n'
-if put_anchor in exp and 'upload_started = time.monotonic()' not in exp:
+put_if = '        if put_url:\n'
+if put_if in exp and 'upload_started = time.monotonic()' not in exp:
     exp = exp.replace(
-        put_anchor,
-        '            upload_started = time.monotonic()\n' + put_anchor,
+        put_if,
+        put_if + '            upload_started = time.monotonic()\n',
         1,
     )
     uploaded_anchor = '            uploaded = True\n'
