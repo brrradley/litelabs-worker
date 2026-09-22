@@ -11,7 +11,8 @@ WORKDIR /app
 RUN python -m pip install --no-cache-dir --upgrade \
         "torch==2.6.0" "torchaudio==2.6.0" "torchvision==0.21.0" \
     && python -m pip install --no-cache-dir --upgrade \
-        "audio-separator==0.47.0" "bs-roformer-infer" "asteroid==0.7.0" "torch-complex==0.4.4" \
+        "audio-separator==0.47.0" "bs-roformer-infer" "asteroid==0.7.0" \
+        "torch-complex==0.4.4" "typeguard==2.13.3" \
     && python - <<'PY'
 import importlib.metadata as md
 import torch
@@ -21,6 +22,7 @@ print('research bs-roformer-infer', md.version('bs-roformer-infer'))
 assert tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2]) >= (2, 6)
 assert md.version('audio-separator') == '0.47.0'
 assert md.version('torch-complex') == '0.4.4'
+assert md.version('typeguard') == '2.13.3'
 PY
 
 # Bake every public challenger selected for the consolidated shootout through
@@ -55,14 +57,19 @@ print('UNMIXX research checkpoint/import verified')
 PY
 
 COPY research_benchmark_v2.py /app/research_benchmark_v2.py
+COPY litelabs_research_full_matrix_patch.py /app/litelabs_research_full_matrix_patch.py
 COPY litelabs_research_benchmark_handler_patch.py /app/litelabs_research_benchmark_handler_patch.py
 
-RUN python /app/litelabs_research_benchmark_handler_patch.py \
+RUN python /app/litelabs_research_full_matrix_patch.py \
+    && python /app/litelabs_research_benchmark_handler_patch.py \
     && python -m py_compile /app/handler.py /app/research_benchmark_v2.py \
     && python - <<'PY'
 from pathlib import Path
 source = Path('/app/handler.py').read_text(encoding='utf-8')
+benchmark = Path('/app/research_benchmark_v2.py').read_text(encoding='utf-8')
 assert 'mode == "research_benchmark_v2"' in source
+assert '# litelabs_research_full_matrix_v1' in benchmark
+assert 'vocal_parent_kimberley' in benchmark
 for path in (
     '/models/audio_separator/model_bs_roformer_ep_317_sdr_12.9755.ckpt',
     '/models/audio_separator/vocals_mel_band_roformer.ckpt',
