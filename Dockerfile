@@ -30,13 +30,13 @@ for marker in (
 ):
     assert marker in preset, marker
 
-# Result uploads must honour the add-on's chunked-upload request for both
-# parent and Experimental packs. Large single PUTs can be cut off by the web
-# stack after several minutes, so fail the image build if this helper disappears.
+# Chunked POST upload is the production default for both parent and Experimental
+# packs. A single PUT is retained only as an explicit diagnostic override.
 for source in (preset, experimental):
     assert 'def _litelabs_upload_archive(' in source
-    assert 'result_upload_mode' in source
-    assert 'LiteLABS chunked result upload:' in source
+    assert 'requested_mode = str(payload.get("result_upload_mode")' in source
+    assert 'mode = "single" if requested_mode == "single" else "chunked"' in source
+    assert 'LiteLABS chunked result upload' in source
     assert 'requests.post(' in source
 
 # The green base already contains the validated probes and models. Fail the
@@ -51,5 +51,5 @@ for required in (
     path = Path(required)
     assert path.is_file() and path.stat().st_size > 0, required
 
-print('LiteLABS production overlay verified: validated analysis + chunked result upload enabled')
+print('LiteLABS production overlay verified: validated analysis + automatic chunked result upload enabled')
 PY
