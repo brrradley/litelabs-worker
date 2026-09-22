@@ -347,6 +347,69 @@ def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
             _copy_named(lead, outputs / '05_anvuew_autocast_compile_lead.flac')
             _copy_named(back, outputs / '05_anvuew_autocast_compile_backing.flac')
 
+        # Build a genuinely blind A/B/C listening pack. The mapping is kept only
+        # in a deliberately named answer-key file so it can remain unopened
+        # until after the listener has scored lead and backing quality.
+        if current_lead and current_back and anvuew_ref and anvuew_ac.get('returncode') == 0:
+            ac_lead = Path(anvuew_ac['primary'])
+            ac_back = Path(anvuew_ac['secondary'])
+            candidates = [
+                ('Current Becruily FP32', current_lead, current_back),
+                ('Anvuew FP32', anvuew_ref[0], anvuew_ref[1]),
+                ('Anvuew autocast + compile', ac_lead, ac_back),
+            ]
+            blinded = sorted(
+                candidates,
+                key=lambda item: uuid.uuid5(uuid.NAMESPACE_DNS, f'{build_sha}:{track}:{item[0]}').int,
+            )
+            blind_root = root / 'blind_listening_pack'
+            blind_root.mkdir(parents=True, exist_ok=True)
+            answer_lines = ['LiteLABS Blind Listening Answer Key', '===============================', '']
+            for letter, (label, lead_path, back_path) in zip(('A', 'B', 'C'), blinded):
+                _crop_center(lead_path, blind_root / f'{letter}_lead.flac', 60.0)
+                _crop_center(back_path, blind_root / f'{letter}_backing.flac', 60.0)
+                answer_lines.append(f'{letter} = {label}')
+            (blind_root / 'LISTEN_FIRST.txt').write_text(
+                'LiteLABS Lead / Backing Blind Listening Test\n'
+                '===========================================\n\n'
+                'Do not open ANSWER_KEY_AFTER_LISTENING.txt until scoring is complete.\n\n'
+                'Listen to A/B/C lead stems first, then A/B/C backing stems.\n'
+                'Use the same headphones/speakers and level for every file.\n\n'
+                'Score each candidate 1-10 for:\n'
+                '- vocal isolation / bleed\n'
+                '- retained harmonies and ad-libs\n'
+                '- artefacts / warble\n'
+                '- naturalness\n'
+                '- usefulness of the backing-vocal stem\n\n'
+                'Then give one overall preference for LEAD and one for BACKING.\n',
+                encoding='utf-8',
+            )
+            (blind_root / 'SCORECARD.txt').write_text(
+                'A lead: isolation __  retention __  artefacts __  naturalness __\n'
+                'B lead: isolation __  retention __  artefacts __  naturalness __\n'
+                'C lead: isolation __  retention __  artefacts __  naturalness __\n\n'
+                'A backing: isolation __  retention __  artefacts __  naturalness __  usefulness __\n'
+                'B backing: isolation __  retention __  artefacts __  naturalness __  usefulness __\n'
+                'C backing: isolation __  retention __  artefacts __  naturalness __  usefulness __\n\n'
+                'Preferred lead: __\nPreferred backing: __\nOverall preference: __\n',
+                encoding='utf-8',
+            )
+            (blind_root / 'ANSWER_KEY_AFTER_LISTENING.txt').write_text(
+                '\n'.join(answer_lines) + '\n', encoding='utf-8'
+            )
+            blind_zip = outputs / 'BLIND_LEAD_BACK_LISTENING_TEST.zip'
+            with zipfile.ZipFile(blind_zip, 'w', compression=zipfile.ZIP_STORED) as blind_bundle:
+                for blind_file in sorted(blind_root.iterdir()):
+                    if blind_file.is_file():
+                        blind_bundle.write(blind_file, arcname=blind_file.name)
+            report['blind_listening_pack'] = {
+                'created': True,
+                'excerpt_seconds': 60,
+                'filename': blind_zip.name,
+                'candidates': 3,
+                'mapping_hidden_in_answer_key': True,
+            }
+
         emit('Testing bounded-memory UNMIXX multi-vocal separation', 80)
         unmixx_input = root / 'unmixx_vocals.wav'
         rc, _, log = _run(['ffmpeg', '-y', '-i', str(sw_vocals), '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', str(unmixx_input)], timeout=300)
