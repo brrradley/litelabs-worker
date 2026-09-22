@@ -108,25 +108,10 @@ if 'validated_instrument_router_reused_v2' not in text:
 '''
     text = text[:start] + replacement + text[end:]
 
-# The old residual Mega53 inventory was another ~20s pass. It no longer adds
-# routing information that Inst-MTG did not already provide before separation.
-residual_start = '        emit("Analysing Residual Instruments", 83)\n'
-residual_end = '        emit("Running LiteLABS-SX Saxophone Separation", 90)\n'
-if 'residual_inventory_fast_skip_v2' not in text:
-    start = text.find(residual_start)
-    end = text.find(residual_end, start)
-    if start >= 0 and end >= 0:
-        replacement = '''        # residual_inventory_fast_skip_v2
-        residual_inventory = {
-            "ran": False,
-            "detected": [],
-            "evidence": {},
-            "policy": "skipped: validated pre-stem Inst-MTG inventory is authoritative",
-        }
-        timings["residual_inventory"] = 0.0
-
-'''
-        text = text[:start] + replacement + text[end:]
+# Keep the existing residual-inventory block structurally intact for now.
+# The expensive global Mega53 detector has already been removed. A separate,
+# source-scoped change will remove this residual research pass after the fast
+# production path is green, avoiding another brittle cross-block text splice.
 
 # Keep the fast detector evidence in the technical report under the established
 # field name used by QA/admin tooling.
