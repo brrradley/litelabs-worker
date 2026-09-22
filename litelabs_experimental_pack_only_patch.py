@@ -52,10 +52,6 @@ text = text.replace(
     'emit("Packaging Experimental Stems", 92)',
 )
 text = text.replace(
-    'archive = root / f"{track}_parent_plus_experimental.zip"',
-    'archive = root.parent / f"{root.name}_{track}_experimental_stems.zip"',
-)
-text = text.replace(
     '"quality_baseline": "BS-RoFormer-SW parent stems at ZIP root",',
     '"quality_baseline": "RoFormer parents used internally for routing/QA only",',
 )
@@ -88,20 +84,83 @@ text = text.replace(
     '"root_metadata_files": sorted(p.name for p in final.iterdir() if p.is_file()),',
 )
 
+# Own the final packaging/upload tail completely. The inherited production image
+# has accumulated multiple generations of size/cleanup guards; those were able
+# to delete the archive before the normal return path touched it. Replacing the
+# tail here makes serverless packaging deterministic again.
+pack_marker = '        emit("Packaging Experimental Stems", 92)\n'
+pack_pos = text.rfind(pack_marker)
+if pack_pos < 0:
+    raise RuntimeError('Could not locate final Experimental packaging marker')
+
+final_tail = '''        # deterministic_serverless_pack_tail_v1
+        emit("Packaging Experimental Stems", 92)
+        archive = root / f"{track}_experimental_stems.zip"
+        package_started = time.monotonic()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
+            for p in sorted(final.rglob("*")):
+                if p.is_file():
+                    bundle.write(p, arcname=str(p.relative_to(final)))
+        timings["package_zip"] = round(time.monotonic() - package_started, 3)
+        archive_size_bytes = archive.stat().st_size
+
+        uploaded = False
+        local_result_path = None
+        research_output_dir = str(payload.get("research_output_dir") or "").strip()
+        if research_output_dir:
+            import shutil
+            output_root = Path(research_output_dir)
+            output_root.mkdir(parents=True, exist_ok=True)
+            local_result_path = output_root / archive.name
+            shutil.copy2(archive, local_result_path)
+
+        put_url = str(payload.get("result_put_url") or "").strip()
+        if put_url:
+            emit("Uploading Stem Pack", 96)
+            import requests
+            with archive.open("rb") as handle:
+                response = requests.put(
+                    put_url,
+                    data=handle,
+                    headers={"Content-Type": "application/zip"},
+                    timeout=(30, 1800),
+                )
+            response.raise_for_status()
+            uploaded = True
+
+        timings["total"] = round(time.monotonic() - started, 3)
+        emit("Stem Extraction Complete", 100)
+        return _json_safe({
+            "ok": True,
+            "mode": MODE,
+            "track": track,
+            "archive_name": archive.name,
+            "archive_size_bytes": archive_size_bytes,
+            "uploaded": uploaded,
+            "result_url": payload.get("result_public_url"),
+            "local_result_path": str(local_result_path) if local_result_path else None,
+            "root_metadata_files": sorted(p.name for p in final.iterdir() if p.is_file()),
+            "experimental_files": sorted(p.name for p in experimental.iterdir() if p.is_file()),
+            "report": report,
+            "research_qa": research_qa,
+            "timings_seconds": timings,
+        })
+'''
+text = text[:pack_pos] + final_tail
 
 path.write_text(text, encoding='utf-8')
 
 check = path.read_text(encoding='utf-8')
 if 'experimental_pack_only_v1' not in check:
-    # Marker can disappear when an earlier patch has already removed the exact
-    # parent-copy loop. Stamp the policy marker independently of that anchor.
     check = '# experimental_pack_only_v1\n' + check
     path.write_text(check, encoding='utf-8')
 compile(check, str(path), 'exec')
 assert 'experimental_pack_only_v1' in check
 assert '_parent_plus_experimental.zip' not in check
 assert '_experimental_stems.zip' in check
-assert 'archive = root.parent / f"{root.name}_{track}_experimental_stems.zip"' in check
+assert 'deterministic_serverless_pack_tail_v1' in check
+assert 'archive_size_bytes = archive.stat().st_size' in check
+assert 'Stem pack exceeds storage upload limit' not in check
 assert 'Packaging Experimental Stems' in check
 assert 'root_parent_files' not in check
 assert 'experimental = final / "experimental"' not in check
