@@ -327,7 +327,7 @@ assert 'validated_instrument_router_v2' in source
 assert 'validated_instrument_router_reused_v2' in source
 assert 'MVSep Mega53' not in source
 assert 'Analysing Instrument Inventory' not in source
-assert 'DETECTED INSTRUMENTS' in source
+assert 'ANALYSIS' in source
 assert 'validated_analysis_pre_stem_v2' in source
 assert 'validated_analysis_complete_before_stems_v2' in source
 assert '["python", "-u", "/app/genre_probe.py", str(downloaded)]' in source
@@ -345,7 +345,7 @@ assert '"electricguitar": "Electric Guitar"' in source
 assert '"doublebass": "Double Bass"' in source
 assert 'LITELABS G400 GENRE CANDIDATES' not in source
 assert 'ESSENTIA GENRE CANDIDATES' not in source
-assert 'public_readme_inventory_final_v1' in source
+assert 'public_readme_inventory_final_v2' in source
 assert 'experimental_pack_only_v1' in source
 assert '_experimental_stems.zip' in source
 assert '_parent_plus_experimental.zip' not in source
