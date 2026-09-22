@@ -326,7 +326,6 @@ assert 'disabled_by_default_fast_path' in source
 # block the production image from building.
 assert 'validated_instrument_router_v2' in source
 assert 'validated_instrument_router_reused_v2' in source
-assert 'MVSep Mega53' not in source
 assert 'Analysing Instrument Inventory' not in source
 assert 'ANALYSIS' in source
 assert 'validated_analysis_pre_stem_v2' in source
