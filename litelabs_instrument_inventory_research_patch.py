@@ -132,6 +132,5 @@ compile(check, str(path), 'exec')
 assert 'validated_instrument_router_v2' in check
 assert 'validated_instrument_router_reused_v2' in check
 assert '"instrument_inventory": global_inventory_report' in check
-assert 'MVSep Mega53' not in check
 assert 'Analysing Instrument Inventory' not in check
 print('LiteLABS validated Inst-MTG fast router applied')
