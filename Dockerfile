@@ -5,9 +5,10 @@ ENV LITELABS_BUILD_SHA=${LITELABS_BUILD_SHA}
 
 WORKDIR /app
 
-# Production is layered from the exact green dc2ef73 image. Only the Basic/Core
-# preset analysis behaviour changes here, keeping Experimental byte-for-byte on
-# its validated production foundation.
+# Production is layered from the exact green dc2ef73 image. Experimental stays
+# on that validated foundation. Basic/Core use the repository's deterministic
+# preset source so this overlay is not coupled to historical base-image anchors.
+COPY preset_pack.py /app/preset_pack.py
 COPY litelabs_parent_preset_analysis_patch.py /app/litelabs_parent_preset_analysis_patch.py
 
 RUN python /app/litelabs_parent_preset_analysis_patch.py \
