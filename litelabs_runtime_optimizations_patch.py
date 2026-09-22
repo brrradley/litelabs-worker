@@ -95,94 +95,9 @@ qa_path.write_text(qa, encoding='utf-8')
 
 exp = exp_path.read_text(encoding='utf-8')
 
-# The inherited QA collector scans both final/ and experimental/. After the pack
-# was flattened those are the same directory, so every public parent duplicate
-# was loaded twice under different labels. Build parent QA references directly
-# from the internal RoFormer stem paths and scan the public directory only for
-# actual child/specialist outputs.
-collector_end = '        qa_pipeline_metrics = {}\n'
-end = exp.find(collector_end)
-if end < 0:
-    raise RuntimeError('Could not locate experimental QA metrics anchor')
-
-# Locate the collector structurally rather than relying on its exact contents;
-# earlier production patches legitimately rewrite model labels inside this block.
-start = exp.rfind('        qa_stems:', 0, end)
-if start < 0:
-    raise RuntimeError('Could not locate experimental QA collector start')
-
-lean_collector = '''        # fast_qa_collector_v1
-        qa_stems: dict[str, Path] = {}
-        qa_models: dict[str, str] = {}
-
-        def add_qa_stem(label: str, candidate: Path, model: str) -> None:
-            if candidate.is_file() and label not in qa_stems:
-                qa_stems[label] = candidate
-                qa_models[label] = model
-
-        # Parent references stay internal. Do not create/read duplicate public
-        # FLAC copies just to score QA.
-        parent_label_map = {
-            "vocals": "vocals",
-            "drums": "percussion",
-            "bass": "bass",
-            "guitar": "strings",
-            "piano": "keys",
-            "other": "other",
-        }
-        for source_label, qa_label in parent_label_map.items():
-            parent_path = stems.get(source_label)
-            if parent_path:
-                add_qa_stem(qa_label, Path(parent_path), "BS-RoFormer-SW")
-
-        for candidate in final.glob("*.flac"):
-            lower = candidate.name.lower()
-            label = None
-            model = "experimental-specialist"
-
-            if lower.endswith("_lead_vocals.flac"):
-                label, model = (
-                    "lead_vocals",
-                    "LiteLABS-VX v2 single-pass vocal parent route",
-                )
-            elif lower.endswith("_backing_vocals.flac"):
-                label, model = (
-                    "backing_vocals",
-                    "LiteLABS-VX v2 single-pass vocal parent route",
-                )
-            elif lower.endswith("_kick.flac"):
-                label, model = "kick", "MDX23C DrumSep 5-stem"
-            elif lower.endswith("_snare.flac"):
-                label, model = "snare", "MDX23C DrumSep 5-stem"
-            elif lower.endswith("_toms.flac"):
-                label, model = "toms", "MDX23C DrumSep 5-stem"
-            elif lower.endswith("_hats.flac"):
-                label, model = (
-                    "hats",
-                    "MDX23C DrumSep 5-stem (hh+cymbals merged)",
-                )
-            elif "sax_specialist" in lower and (
-                "_sax" in lower or lower.endswith("sax.flac")
-            ):
-                label, model = (
-                    "saxophone",
-                    "LiteLABS Sax specialist",
-                )
-            elif "sax_specialist" in lower:
-                label, model = "sax_residual", "LiteLABS Sax specialist"
-            elif "wind_brass_residual" in lower:
-                label, model = (
-                    "wind_brass_residual",
-                    "LiteLABS Wind specialist",
-                )
-            elif "woodwind" in lower or "wind_brass" in lower:
-                label, model = "wind_brass", "LiteLABS Wind specialist"
-
-            if label:
-                add_qa_stem(label, candidate, model)
-
-'''
-exp = exp[:start] + lean_collector + exp[end:]
+# Keep the inherited QA collector intact. The sampling optimisation above
+# reduces the cost of every QA read without depending on the collector's
+# internal source shape, which varies across inherited production revisions.
 
 # Remove parent-like public FLACs immediately before final README/packaging.
 # Internal parent paths in stems remain untouched for routing and QA.
@@ -275,7 +190,6 @@ compile(qa_check, str(qa_path), 'exec')
 compile(exp_check, str(exp_path), 'exec')
 assert 'QA_SAMPLE_SECONDS = 60.0' in qa_check
 assert 'source_duration_seconds' in qa_check
-assert 'fast_qa_collector_v1' in exp_check
 assert 'public_parent_cleanup_v1' in exp_check
 assert 'timings["research_qa"]' in exp_check
 assert 'timings["package_zip"]' in exp_check
