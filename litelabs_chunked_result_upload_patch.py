@@ -3,13 +3,22 @@ from pathlib import Path
 HELPER = r'''
 
 def _litelabs_upload_archive(archive, put_url: str, payload: dict, archive_size_bytes: int) -> dict:
-    """Upload a result archive, using retry-safe chunks when requested by the caller."""
+    """Upload a result archive with retry-safe chunks by default.
+
+    Large single PUTs to the LiteRECORDS receiver can sit behind the web stack
+    long enough to hit its request timeout.  Chunked POSTs are therefore the
+    production default.  ``result_upload_mode=single`` remains available only
+    as an explicit diagnostic override.
+    """
     import math
     import time as _upload_time
     import requests
 
-    mode = str(payload.get("result_upload_mode") or "").strip().lower()
-    if mode != "chunked":
+    requested_mode = str(payload.get("result_upload_mode") or "").strip().lower()
+    mode = "single" if requested_mode == "single" else "chunked"
+
+    if mode == "single":
+        print("LiteLABS result upload mode: explicit single PUT", flush=True)
         with archive.open("rb") as handle:
             response = requests.put(
                 put_url,
@@ -26,8 +35,9 @@ def _litelabs_upload_archive(archive, put_url: str, payload: dict, archive_size_
     chunk_mb = max(4, min(32, chunk_mb))
     chunk_bytes = chunk_mb * 1024 * 1024
     total = max(1, int(math.ceil(archive_size_bytes / chunk_bytes)))
+    auto_note = " (automatic default)" if requested_mode != "chunked" else ""
     print(
-        f"LiteLABS chunked result upload: {total} part(s) at up to {chunk_mb} MiB each",
+        f"LiteLABS chunked result upload{auto_note}: {total} part(s) at up to {chunk_mb} MiB each",
         flush=True,
     )
 
