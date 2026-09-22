@@ -327,6 +327,7 @@ assert 'disabled_by_default_fast_path' in source
 assert 'validated_instrument_router_v2' in source
 assert 'validated_instrument_router_reused_v2' in source
 assert 'Analysing Instrument Inventory' not in source
+assert 'residual_inventory_fast_skip_v3' in source
 assert 'ANALYSIS' in source
 assert 'validated_analysis_pre_stem_v2' in source
 assert 'validated_analysis_complete_before_stems_v2' in source
