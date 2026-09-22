@@ -12,9 +12,10 @@ RUN python -m pip install --no-cache-dir --upgrade \
         "torch==2.6.0" "torchaudio==2.6.0" "torchvision==0.21.0" \
     && python -m pip install --no-cache-dir --upgrade \
         "audio-separator==0.47.0" "bs-roformer-infer" "asteroid==0.7.0" \
-        "torch-complex==0.4.4" "typeguard==2.13.3" \
+        "torch-complex==0.4.4" "typeguard==2.13.3" "setuptools==80.9.0" \
     && python - <<'PY'
 import importlib.metadata as md
+import pkg_resources
 import torch
 print('research torch', torch.__version__, 'cuda', torch.version.cuda)
 print('research audio-separator', md.version('audio-separator'))
@@ -23,6 +24,8 @@ assert tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2]) >= 
 assert md.version('audio-separator') == '0.47.0'
 assert md.version('torch-complex') == '0.4.4'
 assert md.version('typeguard') == '2.13.3'
+assert md.version('setuptools') == '80.9.0'
+assert pkg_resources is not None
 PY
 
 # Bake every public challenger selected for the consolidated shootout through
