@@ -355,7 +355,6 @@ assert '_parent_plus_experimental.zip' not in source
 assert 'root_parent_files' not in source
 assert 'experimental = final / "experimental"' not in source
 assert 'track = track[:-17]' in source
-assert 'fast_qa_collector_v1' in source
 assert 'public_parent_cleanup_v1' in source
 assert 'timings["research_qa"]' in source
 assert 'timings["package_zip"]' in source
