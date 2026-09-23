@@ -215,6 +215,79 @@ def _focused_unmixx_chunked(input_path: Path, root: Path, timeout: int, *, chunk
     }
 
 
+
+def _focused_upload_archive(archive: Path, put_url: str, payload: dict) -> dict:
+    """Upload research artifacts through the LiteRECORDS chunk receiver."""
+    import math
+    import time as _upload_time
+    import requests
+
+    size = archive.stat().st_size
+    chunk_mb = int(payload.get("result_chunk_size_mb") or 16)
+    chunk_mb = max(4, min(32, chunk_mb))
+    chunk_bytes = chunk_mb * 1024 * 1024
+    total = max(1, int(math.ceil(size / chunk_bytes)))
+
+    print(
+        f"LiteLABS research chunked result upload: {total} part(s) at up to {chunk_mb} MiB each",
+        flush=True,
+    )
+
+    with archive.open("rb") as handle:
+        for part in range(total):
+            data = handle.read(chunk_bytes)
+            if not data:
+                raise RuntimeError(
+                    f"Research archive ended before chunk {part + 1}/{total}"
+                )
+
+            for attempt in range(1, 4):
+                try:
+                    response = requests.post(
+                        put_url,
+                        params={"part": part, "total": total, "size": size},
+                        data=data,
+                        headers={"Content-Type": "application/octet-stream"},
+                        timeout=(30, 600),
+                    )
+                    if response.status_code == 413:
+                        return {
+                            "uploaded": False,
+                            "status_code": 413,
+                            "part": part,
+                        }
+                    response.raise_for_status()
+                    try:
+                        body = response.json()
+                    except ValueError:
+                        body = {}
+                    if body and not bool(body.get("ok", False)):
+                        raise RuntimeError(
+                            str(body.get("error") or "Chunk receiver rejected research upload")
+                        )
+                    if part == total - 1 and body and not bool(body.get("complete", False)):
+                        raise RuntimeError(
+                            "Chunk receiver did not confirm final research archive assembly"
+                        )
+                    print(
+                        f"LiteLABS research upload chunk {part + 1}/{total} complete",
+                        flush=True,
+                    )
+                    break
+                except Exception as exc:
+                    if attempt >= 3:
+                        raise
+                    wait = 2 ** (attempt - 1)
+                    print(
+                        f"LiteLABS research upload chunk {part + 1}/{total} attempt "
+                        f"{attempt} failed: {exc}; retrying in {wait}s",
+                        flush=True,
+                    )
+                    _upload_time.sleep(wait)
+
+    return {"uploaded": True, "mode": "chunked", "chunks": total}
+
+
 def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
     """Focused SET research: viable lead/back, drums and bounded-memory multi-vocal."""
     audio_url = str(payload.get('audio_url') or payload.get('source_url') or '').strip()
@@ -444,17 +517,45 @@ def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
                 if output.is_file():
                     bundle.write(output, arcname=output.name)
 
+    archive_size = archive.stat().st_size
+    uploaded = False
+    result_url = payload.get('result_public_url')
+    put_url = str(payload.get('result_put_url') or '').strip()
+    upload_details = None
+    if put_url:
+        emit('Uploading focused research comparison', 96)
+        upload_details = _focused_upload_archive(archive, put_url, payload)
+        if int(upload_details.get('status_code') or 0) == 413:
+            return _json_safe({
+                'ok': False,
+                'mode': 'research_benchmark_focused_v2',
+                'track': track,
+                'build_sha': build_sha,
+                'failed_stage': 'result_upload',
+                'error_code': 'result_too_large',
+                'http_status': 413,
+                'archive_name': archive.name,
+                'archive_size_bytes': archive_size,
+                'uploaded': False,
+                'result_url': None,
+                'report': report,
+            })
+        uploaded = bool(upload_details.get('uploaded'))
+
     result = {
         'ok': True,
         'mode': 'research_benchmark_focused_v2',
         'track': track,
         'build_sha': build_sha,
         'archive_name': archive.name,
-        'archive_size_bytes': archive.stat().st_size,
-        'uploaded': False,
-        'result_url': None,
+        'archive_size_bytes': archive_size,
+        'uploaded': uploaded,
+        'result_url': result_url if uploaded else None,
+        'upload': upload_details,
         'report': report,
     }
+    if uploaded:
+        archive.unlink(missing_ok=True)
     emit('Focused research benchmark complete', 100)
     return _json_safe(result)
 
