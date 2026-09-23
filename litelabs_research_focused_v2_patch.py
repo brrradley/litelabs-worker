@@ -265,7 +265,10 @@ def _focused_upload_archive(archive: Path, put_url: str, payload: dict) -> dict:
                         raise RuntimeError(
                             str(body.get("error") or "Chunk receiver rejected research upload")
                         )
-                    if part == total - 1 and body and not bool(body.get("complete", False)):
+                    if part == total - 1 and body and not (
+                        bool(body.get("complete", False))
+                        or bool(body.get("already_complete", False))
+                    ):
                         raise RuntimeError(
                             "Chunk receiver did not confirm final research archive assembly"
                         )
