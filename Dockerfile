@@ -14,8 +14,16 @@ COPY litelabs_chunked_result_upload_patch.py /app/litelabs_chunked_result_upload
 COPY multilead_research.py /app/multilead_research.py
 COPY litelabs_unmixx_multilead_patch.py /app/litelabs_unmixx_multilead_patch.py
 
-RUN python /app/litelabs_parent_preset_analysis_patch.py \
+RUN rm -rf /opt/unmixx /opt/medleyvox /models/medleyvox \
+    && git clone https://github.com/jihoojung0106/unmixx.git /opt/unmixx \
+    && cd /opt/unmixx \
+    && git checkout 8e750521b5942f4717656cac86a23cf0bd90dea5 \
+    && test -s /opt/unmixx/ckpt/best.ckpt \
+    && test -s /opt/unmixx/ckpt/conf.yml \
+    && cd /app \
+    && python /app/litelabs_parent_preset_analysis_patch.py \
     && python /app/litelabs_chunked_result_upload_patch.py \
+    && python /app/litelabs_unmixx_multilead_patch.py \
     && python -m py_compile /app/preset_pack.py /app/experimental_children_v1.py /app/multilead_research.py /app/litelabs_parent_preset_analysis_patch.py /app/litelabs_chunked_result_upload_patch.py /app/litelabs_unmixx_multilead_patch.py \
     && python - <<'PY'
 from pathlib import Path
