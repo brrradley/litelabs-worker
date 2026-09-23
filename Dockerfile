@@ -11,10 +11,12 @@ WORKDIR /app
 COPY preset_pack.py /app/preset_pack.py
 COPY litelabs_parent_preset_analysis_patch.py /app/litelabs_parent_preset_analysis_patch.py
 COPY litelabs_chunked_result_upload_patch.py /app/litelabs_chunked_result_upload_patch.py
+COPY multilead_research.py /app/multilead_research.py
+COPY litelabs_unmixx_multilead_patch.py /app/litelabs_unmixx_multilead_patch.py
 
 RUN python /app/litelabs_parent_preset_analysis_patch.py \
     && python /app/litelabs_chunked_result_upload_patch.py \
-    && python -m py_compile /app/preset_pack.py /app/experimental_children_v1.py /app/litelabs_parent_preset_analysis_patch.py /app/litelabs_chunked_result_upload_patch.py \
+    && python -m py_compile /app/preset_pack.py /app/experimental_children_v1.py /app/multilead_research.py /app/litelabs_parent_preset_analysis_patch.py /app/litelabs_chunked_result_upload_patch.py /app/litelabs_unmixx_multilead_patch.py \
     && python - <<'PY'
 from pathlib import Path
 
@@ -51,5 +53,12 @@ for required in (
     path = Path(required)
     assert path.is_file() and path.stat().st_size > 0, required
 
-print('LiteLABS production overlay verified: validated analysis + automatic chunked result upload enabled')
+assert Path('/opt/unmixx/ckpt/best.ckpt').is_file()
+assert Path('/opt/unmixx/ckpt/conf.yml').is_file()
+multi = Path('/app/multilead_research.py').read_text(encoding='utf-8')
+assert 'UNMIXX chunked' in multi
+assert 'MedleyVox' not in multi
+assert 'multi_lead_unmixx' in experimental
+
+print('LiteLABS production overlay verified: analysis + chunked upload + UNMIXX multi-lead enabled')
 PY
