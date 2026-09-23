@@ -79,9 +79,9 @@ def run_multilead_research(
 ) -> dict:
     """Split a vocal parent into two co-lead singers with chunked UNMIXX.
 
-    The public Experimental interface is intentionally kept compatible with the
-    former MedleyVox helper: it returns two files named lead_vocals_a/b and is
-    still invoked only when the existing multi-lead route is enabled.
+    The public Experimental interface remains compatible with the existing
+    multi-lead route: it returns two files named lead_vocals_a/b and is invoked
+    only when multi-lead separation is explicitly enabled.
     """
     started = time.monotonic()
     if progress:
