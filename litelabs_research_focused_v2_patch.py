@@ -402,6 +402,7 @@ def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
         current = _run_separator(vocal_parent, current_dir, KARAOKE_BASELINE, [], timeout)
         report['tests']['lead_back_current_fp32'] = current
         current_lead = current_back = None
+        listening_archive = None
         if current.get('returncode') == 0:
             current_lead = Path(current['primary'])
             current_back = Path(current['secondary'])
@@ -494,6 +495,7 @@ def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
                 '\n'.join(answer_lines) + '\n', encoding='utf-8'
             )
             blind_zip = outputs / 'BLIND_LEAD_BACK_LISTENING_TEST.zip'
+            listening_archive = blind_zip
             with zipfile.ZipFile(blind_zip, 'w', compression=zipfile.ZIP_STORED) as blind_bundle:
                 for blind_file in sorted(blind_root.iterdir()):
                     if blind_file.is_file():
@@ -536,10 +538,24 @@ def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
         )
 
         emit('Packaging focused research comparison', 94)
-        with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as bundle:
-            for output in sorted(outputs.rglob('*')):
-                if output.is_file():
-                    bundle.write(output, arcname=output.name)
+        if listening_only:
+            if not listening_archive or not listening_archive.is_file():
+                raise RuntimeError('Blind listening archive was not created')
+            # For listening-only runs, publish the blind pack itself instead of
+            # wrapping it inside the full ~500 MiB research artifact. Besides
+            # being what the listener actually needs, this keeps the public file
+            # well below common 512 MiB CDN/proxy boundaries.
+            shutil.copy2(listening_archive, archive)
+            report['published_artifact'] = {
+                'kind': 'blind_listening_pack',
+                'source_filename': listening_archive.name,
+                'size_bytes': archive.stat().st_size,
+            }
+        else:
+            with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as bundle:
+                for output in sorted(outputs.rglob('*')):
+                    if output.is_file():
+                        bundle.write(output, arcname=output.name)
 
     archive_size = archive.stat().st_size
     uploaded = False
