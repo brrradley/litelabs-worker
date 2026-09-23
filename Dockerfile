@@ -13,8 +13,11 @@ COPY litelabs_parent_preset_analysis_patch.py /app/litelabs_parent_preset_analys
 COPY litelabs_chunked_result_upload_patch.py /app/litelabs_chunked_result_upload_patch.py
 COPY multilead_research.py /app/multilead_research.py
 COPY litelabs_unmixx_multilead_patch.py /app/litelabs_unmixx_multilead_patch.py
+COPY litelabs_anvuew_karaoke_patch.py /app/litelabs_anvuew_karaoke_patch.py
 
-RUN rm -rf /opt/unmixx /opt/medleyvox /models/medleyvox \
+RUN mkdir -p /models/audio_separator \
+    && audio-separator --model_file_dir /models/audio_separator --model_filename bs_roformer_karaoke_anvuew.ckpt --download_model_only \
+    && rm -rf /opt/unmixx /opt/medleyvox /models/medleyvox \
     && git clone https://github.com/jihoojung0106/unmixx.git /opt/unmixx \
     && cd /opt/unmixx \
     && git checkout 8e750521b5942f4717656cac86a23cf0bd90dea5 \
@@ -24,6 +27,7 @@ RUN rm -rf /opt/unmixx /opt/medleyvox /models/medleyvox \
     && python /app/litelabs_parent_preset_analysis_patch.py \
     && python /app/litelabs_chunked_result_upload_patch.py \
     && python /app/litelabs_unmixx_multilead_patch.py \
+    && python /app/litelabs_anvuew_karaoke_patch.py \
     && python -m py_compile /app/preset_pack.py /app/experimental_children_v1.py /app/multilead_research.py /app/litelabs_parent_preset_analysis_patch.py /app/litelabs_chunked_result_upload_patch.py /app/litelabs_unmixx_multilead_patch.py /app/litelabs_anvuew_karaoke_patch.py \
     && python - <<'PY'
 from pathlib import Path
