@@ -6,13 +6,15 @@ ENV LITELABS_BUILD_SHA=${LITELABS_BUILD_SHA} \
 
 WORKDIR /app
 
-# Research image deliberately rides current public inference tooling. Production
-# remains pinned until a candidate has passed the benchmark and listening gate.
+# Research only: production remains pinned. The research image rides current
+# public inference tooling and carries only the candidates relevant to the
+# present SET decisions.
 RUN python -m pip install --no-cache-dir --upgrade \
         "torch==2.6.0" "torchaudio==2.6.0" "torchvision==0.21.0" \
     && python -m pip install --no-cache-dir --upgrade \
-        "audio-separator==0.47.0" "bs-roformer-infer" "asteroid==0.7.0" \
+        "audio-separator==0.47.0" "bs-roformer-infer" \
         "torch-complex==0.4.4" "typeguard==2.13.3" "setuptools==80.9.0" \
+        "huggingface_hub>=0.30,<2" "pyyaml>=6,<7" \
     && python - <<'PY'
 import importlib.metadata as md
 import pkg_resources
@@ -24,85 +26,72 @@ assert tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2]) >= 
 assert md.version('audio-separator') == '0.47.0'
 assert md.version('torch-complex') == '0.4.4'
 assert md.version('typeguard') == '2.13.3'
-assert md.version('setuptools') == '80.9.0'
 assert pkg_resources is not None
 PY
 
-# Lead/back research candidates. Anvuew AC+C is the incumbent; the two
-# next-generation challengers explicitly model lead/backing vocals.
-RUN mkdir -p /models/audio_separator /models/karaoke_nextgen \
+# Keep the two audio-separator-native karaoke controls available. Other
+# mvsepless candidates are staged by inspecting the mirror's actual configs.
+RUN mkdir -p /models/audio_separator \
     && audio-separator --model_file_dir /models/audio_separator \
         --model_filename bs_roformer_karaoke_anvuew.ckpt --download_model_only \
     && audio-separator --model_file_dir /models/audio_separator \
-        --model_filename mel_band_roformer_karaoke_becruily.ckpt --download_model_only \
-    && python - <<'PY'
-from pathlib import Path
-import requests
+        --model_filename mel_band_roformer_karaoke_becruily.ckpt --download_model_only
 
-assets = {
-    "mbr_bve_gonzaluigi.ckpt": "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/mel_band_roformer/mbr_bve_gonzaluigi.ckpt?download=true",
-    "mbr_bve_gonzaluigi_config.yaml": "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/mel_band_roformer/mbr_bve_gonzaluigi_config.yaml?download=true",
-    "bs_karaoke_3stem_giantailab.ckpt": "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/bs_roformer/bs_karaoke_3stem_giantailab.ckpt?download=true",
-    "bs_karaoke_3stem_giantailab_config.yaml": "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/bs_roformer/bs_karaoke_3stem_giantailab_config.yaml?download=true",
-}
-root = Path("/models/karaoke_nextgen")
-for name, url in assets.items():
-    dest = root / name
-    with requests.get(url, stream=True, timeout=(30, 1800)) as response:
-        response.raise_for_status()
-        with dest.open("wb") as handle:
-            for chunk in response.iter_content(4 * 1024 * 1024):
-                if chunk:
-                    handle.write(chunk)
-    assert dest.stat().st_size > 0, dest
-    print("downloaded", dest, dest.stat().st_size)
-PY
-
-# UNMIXX remains research-only. The focused benchmark now runs it in bounded
-# chunks with overlap so full-song VRAM use cannot scale with track duration.
-RUN rm -rf /opt/unmixx /opt/medleyvox /models/medleyvox \
-    && git clone https://github.com/jihoojung0106/unmixx.git /opt/unmixx \
-    && cd /opt/unmixx \
-    && git checkout 8e750521b5942f4717656cac86a23cf0bd90dea5 \
-    && test -s /opt/unmixx/ckpt/best.ckpt \
-    && test -s /opt/unmixx/ckpt/conf.yml \
-    && PYTHONPATH=/opt/unmixx python - <<'PY'
-import torch
-import yaml
-import look2hear.models
-from pathlib import Path
-cfg = yaml.safe_load(Path('/opt/unmixx/ckpt/conf.yml').read_text())
-assert cfg['audionet']['audionet_name'] == 'UNMIXX'
-assert hasattr(look2hear.models, 'UNMIXX')
-print('UNMIXX research checkpoint/import verified')
-PY
+# Discover by configuration, not filename:
+# - any genuine 124-band BS-RoFormer vocal/instrumental candidate
+# - any MelBand/SCNet 4/5-way drum breakdown candidate
+# plus the known lead/back and Anvuew 22.50 dereverb checkpoints.
+COPY prepare_set_research_models.py /app/prepare_set_research_models.py
+RUN python /app/prepare_set_research_models.py
 
 COPY research_benchmark_v2.py /app/research_benchmark_v2.py
 COPY litelabs_research_benchmark_handler_patch.py /app/litelabs_research_benchmark_handler_patch.py
 COPY litelabs_research_focused_v2_patch.py /app/litelabs_research_focused_v2_patch.py
+COPY litelabs_set_targeted_research_patch.py /app/litelabs_set_targeted_research_patch.py
 
 RUN python /app/litelabs_research_benchmark_handler_patch.py \
     && python /app/litelabs_research_focused_v2_patch.py \
-    && python -m py_compile /app/handler.py /app/research_benchmark_v2.py /app/litelabs_research_focused_v2_patch.py \
+    && python /app/litelabs_set_targeted_research_patch.py \
+    && python -m py_compile \
+        /app/handler.py \
+        /app/research_benchmark_v2.py \
+        /app/litelabs_set_targeted_research_patch.py \
     && python - <<'PY'
+import json
 from pathlib import Path
+
 source = Path('/app/handler.py').read_text(encoding='utf-8')
 benchmark = Path('/app/research_benchmark_v2.py').read_text(encoding='utf-8')
+catalog_path = Path('/models/set_research/catalog.json')
 assert 'mode == "research_benchmark_v2"' in source
-assert '# litelabs_research_focused_v2' in benchmark
-assert '_run_research_benchmark_single = _run_research_benchmark_focused' in benchmark
-assert 'lead_back_anvuew_autocast_compile' in benchmark
-assert 'unmixx_chunked' in benchmark
-assert 'drumsep_current' in benchmark
+assert '# litelabs_set_targeted_research_v1' in benchmark
+assert '_run_research_benchmark_single = _set_targeted_single' in benchmark
+assert 'parent_124_band_candidates' in benchmark
+assert 'drums_new_candidates' in benchmark
+assert 'lead_back_candidates' in benchmark
+assert 'dereverb_anvuew_2250' in benchmark
+assert catalog_path.is_file()
+
+catalog = json.loads(catalog_path.read_text(encoding='utf-8'))
+known = {x.get('id') for x in catalog.get('known', [])}
+required = {
+    'gonzaluigi_bve',
+    'giantailab_karaoke_3stem',
+    'gabox_karaoke',
+    'anvuew_dereverb_2250',
+}
+missing = required - known
+assert not missing, f'missing SET research assets: {sorted(missing)}'
+
 for path in (
     '/models/audio_separator/bs_roformer_karaoke_anvuew.ckpt',
     '/models/audio_separator/mel_band_roformer_karaoke_becruily.ckpt',
-    '/models/karaoke_nextgen/mbr_bve_gonzaluigi.ckpt',
-    '/models/karaoke_nextgen/mbr_bve_gonzaluigi_config.yaml',
-    '/models/karaoke_nextgen/bs_karaoke_3stem_giantailab.ckpt',
-    '/models/karaoke_nextgen/bs_karaoke_3stem_giantailab_config.yaml',
-    '/opt/unmixx/ckpt/best.ckpt',
 ):
-    assert Path(path).is_file() and Path(path).stat().st_size > 0, path
-print('LiteLABS focused research benchmark image verified')
+    p = Path(path)
+    assert p.is_file() and p.stat().st_size > 0, path
+
+print('SET targeted research image verified')
+print('124-band candidates:', len(catalog.get('discovered_124_band', [])))
+print('drum breakdown candidates:', len(catalog.get('discovered_drum_breakdown', [])))
+print('catalog notes:', catalog.get('notes', []))
 PY
