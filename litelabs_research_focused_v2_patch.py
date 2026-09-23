@@ -305,11 +305,301 @@ def _focused_upload_archive(archive: Path, put_url: str, payload: dict) -> dict:
     return {"uploaded": True, "mode": "chunked", "chunks": total}
 
 
+
+def _nextgen_collect_named_outputs(root: Path, names: tuple[str, ...]) -> dict[str, Path]:
+    files = [
+        p for p in root.rglob("*")
+        if p.is_file() and p.suffix.lower() in {".wav", ".flac", ".mp3"}
+    ]
+    found = {}
+    for name in names:
+        wanted = name.lower()
+        matches = []
+        for path in files:
+            stem = path.stem.lower()
+            if stem == wanted or stem.endswith("_" + wanted) or wanted in stem:
+                matches.append(path)
+        if matches:
+            found[name] = max(matches, key=lambda p: p.stat().st_size)
+    return found
+
+
+def _nextgen_mss_candidate(
+    input_path: Path,
+    root: Path,
+    *,
+    model_type: str,
+    config: Path,
+    checkpoint: Path,
+    lead_names: tuple[str, ...],
+    backing_names: tuple[str, ...],
+    timeout: int,
+    label: str,
+) -> dict:
+    repo_dir = Path("/opt/music-source-separation-training")
+    input_dir = root / (label + "_input")
+    output_dir = root / (label + "_output")
+    input_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(input_path, input_dir / "vocals.wav")
+
+    rc, elapsed, log = _run([
+        "python", str(repo_dir / "inference.py"),
+        "--model_type", model_type,
+        "--config_path", str(config),
+        "--start_check_point", str(checkpoint),
+        "--input_folder", str(input_dir),
+        "--store_dir", str(output_dir),
+        "--device_ids", "0",
+        "--disable_detailed_pbar",
+        "--filename_template", "{file_name}/{instr}",
+    ], cwd=repo_dir, timeout=timeout)
+
+    result = {
+        "returncode": rc,
+        "runtime_seconds": round(elapsed, 3),
+        "log_tail": "\n".join(log.splitlines()[-80:]),
+        "model_type": model_type,
+        "config": str(config),
+        "checkpoint": str(checkpoint),
+    }
+    if rc != 0:
+        return result
+
+    lead_map = _nextgen_collect_named_outputs(output_dir, lead_names)
+    back_map = _nextgen_collect_named_outputs(output_dir, backing_names)
+    lead = next(iter(lead_map.values()), None)
+    backing = next(iter(back_map.values()), None)
+    if not lead or not backing:
+        result["error"] = "Could not identify lead/backing outputs"
+        result["files"] = [p.name for p in output_dir.rglob("*") if p.is_file()]
+        result["returncode"] = 2
+        return result
+
+    result["lead"] = str(lead)
+    result["backing"] = str(backing)
+    result["pair_metrics"] = _pair_metrics(input_path, lead, backing)
+    return result
+
+
+def _run_nextgen_karaoke_listening(payload: dict, progress=None) -> dict:
+    """Blind lead/back shootout: production Anvuew AC+C vs two explicit lead/back models."""
+    audio_url = str(payload.get("audio_url") or payload.get("source_url") or "").strip()
+    if not audio_url:
+        return {"ok": False, "mode": MODE, "error": "audio_url is required"}
+
+    timeout = max(300, int(payload.get("timeout_seconds") or 2400))
+    heartbeat = max(5, int(payload.get("heartbeat_seconds") or 15))
+    filename = str(payload.get("filename") or unquote(Path(urlparse(audio_url).path).name) or "track.wav")
+    track = _safe_name(Path(filename).stem)
+    model_dir = Path(str(payload.get("model_dir") or "/models/bs_roformer_sw"))
+    build_sha = os.getenv("LITELABS_BUILD_SHA", "unknown")
+
+    def emit(message: str, percent: int) -> None:
+        print(f"[{MODE}] {message} ({percent}%)", flush=True)
+        if progress:
+            progress(message, percent)
+
+    report = {
+        "schema_version": 1,
+        "mode": "karaoke_nextgen_blind_v1",
+        "build_sha": build_sha,
+        "track": track,
+        "parent": "BS-RoFormer-SW vocals",
+        "candidates": {},
+    }
+
+    archive = Path("/tmp") / f"litelabs-karaoke-nextgen-{uuid.uuid4().hex[:10]}-{track}.zip"
+    started = time.monotonic()
+
+    with tempfile.TemporaryDirectory(prefix="litelabs_karaoke_nextgen_") as temp:
+        root = Path(temp)
+        source_dir = root / "source"
+        sw_dir = root / "sw"
+        blind_root = root / "blind"
+        source_dir.mkdir()
+        sw_dir.mkdir()
+        blind_root.mkdir()
+
+        raw_name = unquote(Path(urlparse(audio_url).path).name) or "input.audio"
+        downloaded = root / raw_name
+        source = source_dir / f"{track}.wav"
+
+        emit("Downloading benchmark source", 2)
+        _download(audio_url, downloaded)
+        rc, _, log = _run(
+            ["ffmpeg", "-y", "-i", str(downloaded), "-ar", "44100", "-ac", "2", str(source)],
+            timeout=300,
+        )
+        if rc != 0:
+            raise RuntimeError("Source conversion failed: " + log[-2000:])
+
+        emit("Running BS-RoFormer vocal parent", 10)
+        sw_config, sw_checkpoint, _ = _resolve_model_files(model_dir, progress=None)
+        rc, sw_elapsed = _run_polled(
+            ["bs-roformer-infer", "--config_path", str(sw_config), "--model_path", str(sw_checkpoint),
+             "--input_folder", str(source_dir), "--store_dir", str(sw_dir)],
+            cwd=None, timeout=timeout, log_path=root / "sw.log", progress=None,
+            stage_name="Research SW baseline", start_percent=10, end_percent=28,
+            heartbeat_seconds=heartbeat,
+        )
+        if rc != 0:
+            raise RuntimeError("SW vocal parent failed")
+        sw_stems = _collect_sw_stems(sw_dir)
+        sw_vocals = sw_stems.get("vocals")
+        if not sw_vocals:
+            raise RuntimeError("SW baseline did not produce vocals")
+        report["sw_parent_runtime_seconds"] = round(sw_elapsed, 3)
+
+        vocal_parent = root / "sw_vocals_pcm16.wav"
+        _focused_pcm16_copy(sw_vocals, vocal_parent)
+
+        emit("Running production Anvuew AC+C", 34)
+        anvuew_dir = root / "anvuew_acc"
+        anvuew = _run_separator(
+            vocal_parent,
+            anvuew_dir,
+            KARAOKE_CHALLENGER,
+            ["--use_autocast", "--use_torch_compile"],
+            timeout,
+        )
+        if anvuew.get("returncode") != 0:
+            raise RuntimeError("Anvuew AC+C failed")
+        anvuew_lead = Path(anvuew["primary"])
+        anvuew_back = Path(anvuew["secondary"])
+        anvuew["pair_metrics"] = _pair_metrics(vocal_parent, anvuew_lead, anvuew_back)
+        report["candidates"]["Anvuew autocast + compile"] = anvuew
+
+        nextgen_root = Path("/models/karaoke_nextgen")
+
+        emit("Running Gonzaluigi Mel-Band RoFormer BVE", 52)
+        bve = _nextgen_mss_candidate(
+            vocal_parent, root,
+            model_type="mel_band_roformer",
+            config=nextgen_root / "mbr_bve_gonzaluigi_config.yaml",
+            checkpoint=nextgen_root / "mbr_bve_gonzaluigi.ckpt",
+            lead_names=("Lead",),
+            backing_names=("Back",),
+            timeout=timeout,
+            label="gonzaluigi_bve",
+        )
+        if bve.get("returncode") != 0:
+            raise RuntimeError("Gonzaluigi BVE failed: " + str(bve.get("error") or bve.get("log_tail") or "unknown"))
+        bve_lead = Path(bve["lead"])
+        bve_back = Path(bve["backing"])
+        report["candidates"]["Gonzaluigi Mel-Band RoFormer BVE"] = bve
+
+        emit("Running GiantAILAB BS-RoFormer Karaoke 3-stem", 70)
+        giant = _nextgen_mss_candidate(
+            vocal_parent, root,
+            model_type="bs_roformer",
+            config=nextgen_root / "bs_karaoke_3stem_giantailab_config.yaml",
+            checkpoint=nextgen_root / "bs_karaoke_3stem_giantailab.ckpt",
+            lead_names=("vocals",),
+            backing_names=("backing_vocal",),
+            timeout=timeout,
+            label="giantailab_3stem",
+        )
+        if giant.get("returncode") != 0:
+            raise RuntimeError("GiantAILAB 3-stem failed: " + str(giant.get("error") or giant.get("log_tail") or "unknown"))
+        giant_lead = Path(giant["lead"])
+        giant_back = Path(giant["backing"])
+        report["candidates"]["GiantAILAB BS-RoFormer Karaoke 3-stem"] = giant
+
+        candidates = [
+            ("Anvuew autocast + compile", anvuew_lead, anvuew_back),
+            ("Gonzaluigi Mel-Band RoFormer BVE", bve_lead, bve_back),
+            ("GiantAILAB BS-RoFormer Karaoke 3-stem", giant_lead, giant_back),
+        ]
+        blinded = sorted(
+            candidates,
+            key=lambda item: uuid.uuid5(uuid.NAMESPACE_DNS, f"{build_sha}:{track}:{item[0]}").int,
+        )
+
+        emit("Building blind listening pack", 88)
+        answer_lines = [
+            "LiteLABS Next-Gen Karaoke Blind Listening Answer Key",
+            "=================================================",
+            "",
+        ]
+        for letter, (label, lead, backing) in zip(("A", "B", "C"), blinded):
+            _crop_center(lead, blind_root / f"{letter}_lead.flac", 60.0)
+            _crop_center(backing, blind_root / f"{letter}_backing.flac", 60.0)
+            answer_lines.append(f"{letter} = {label}")
+
+        (blind_root / "LISTEN_FIRST.txt").write_text(
+            "LiteLABS Next-Gen Karaoke Blind Test\n"
+            "===================================\n\n"
+            "Do not open ANSWER_KEY_AFTER_LISTENING.txt until scoring is complete.\n\n"
+            "Lead is the primary decision. Score A/B/C lead for isolation, retained detail,\n"
+            "artefacts/warble and naturalness. Backing files are included for optional review.\n",
+            encoding="utf-8",
+        )
+        (blind_root / "SCORECARD.txt").write_text(
+            "A lead: isolation __  retention __  artefacts __  naturalness __\n"
+            "B lead: isolation __  retention __  artefacts __  naturalness __\n"
+            "C lead: isolation __  retention __  artefacts __  naturalness __\n\n"
+            "Preferred lead: __\n\n"
+            "Optional backing notes:\nA: __\nB: __\nC: __\n",
+            encoding="utf-8",
+        )
+        (blind_root / "ANSWER_KEY_AFTER_LISTENING.txt").write_text(
+            "\n".join(answer_lines) + "\n", encoding="utf-8"
+        )
+        (blind_root / "research_benchmark_report.json").write_text(
+            json.dumps(_json_safe(report), indent=2), encoding="utf-8"
+        )
+
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as bundle:
+            for item in sorted(blind_root.iterdir()):
+                if item.is_file():
+                    bundle.write(item, arcname=item.name)
+
+    report["total_runtime_seconds"] = round(time.monotonic() - started, 3)
+    archive_size = archive.stat().st_size
+    uploaded = False
+    upload_details = None
+    put_url = str(payload.get("result_put_url") or "").strip()
+    result_url = payload.get("result_public_url")
+    if put_url:
+        emit("Uploading blind comparison", 96)
+        upload_details = _focused_upload_archive(archive, put_url, payload)
+        if int(upload_details.get("status_code") or 0) == 413:
+            return _json_safe({
+                "ok": False,
+                "mode": "karaoke_nextgen_blind_v1",
+                "build_sha": build_sha,
+                "error_code": "result_too_large",
+                "http_status": 413,
+                "uploaded": False,
+            })
+        uploaded = bool(upload_details.get("uploaded"))
+
+    if uploaded:
+        archive.unlink(missing_ok=True)
+    emit("Next-gen karaoke blind test complete", 100)
+    return _json_safe({
+        "ok": True,
+        "mode": "karaoke_nextgen_blind_v1",
+        "build_sha": build_sha,
+        "track": track,
+        "archive_name": archive.name,
+        "archive_size_bytes": archive_size,
+        "uploaded": uploaded,
+        "result_url": result_url if uploaded else None,
+        "upload": upload_details,
+        "report": report,
+    })
+
+
 def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
     """Focused SET research: viable lead/back, drums and bounded-memory multi-vocal."""
     audio_url = str(payload.get('audio_url') or payload.get('source_url') or '').strip()
     if not audio_url:
         return {'ok': False, 'mode': MODE, 'error': 'audio_url is required'}
+
+    if bool(payload.get('listening_only')):
+        return _run_nextgen_karaoke_listening(payload, progress)
 
     timeout = max(300, int(payload.get('timeout_seconds') or 2400))
     heartbeat = max(5, int(payload.get('heartbeat_seconds') or 15))
