@@ -237,6 +237,38 @@ def _set_direct_karaoke(
     if result.get("returncode") != 0:
         return result
     lead, backing = _set_choose_lead_back(result)
+
+    # Several MSST configs declare both Lead/Back (or vocals/other) but use
+    # target_instrument, so inference intentionally writes only the target.
+    # On an already-isolated vocal parent the missing complement is exact and
+    # should be reconstructed as parent - target instead of treating the model
+    # as a failed two-stem separator.
+    files = [Path(x) for x in result.get("files") or []]
+    if (not lead or not backing) and len(files) == 1:
+        only = files[0]
+        mapped = _set_file_map(result)
+        parent_audio, sr = sf.read(str(vocal_parent), always_2d=True, dtype="float32")
+        target_audio, sr2 = sf.read(str(only), always_2d=True, dtype="float32")
+        if int(sr) != int(sr2):
+            result["returncode"] = 3
+            result["error"] = f"single-target sample-rate mismatch: {sr2} != {sr}"
+            return result
+        n = min(len(parent_audio), len(target_audio))
+        complement = (parent_audio[:n] - target_audio[:n]).astype(np.float32)
+        complement_path = root / "derived_complement.wav"
+        sf.write(str(complement_path), complement, sr, subtype="FLOAT")
+
+        if mapped.get("backing") or "back" in only.stem.lower():
+            backing = only
+            lead = complement_path
+            result["derived_stem"] = "lead"
+        else:
+            lead = only
+            backing = complement_path
+            result["derived_stem"] = "backing"
+        result["complement_method"] = "vocal_parent_minus_target"
+        result["derived_complement"] = str(complement_path)
+
     if not lead or not backing:
         result["returncode"] = 3
         result["error"] = "could not map lead/backing outputs"
@@ -264,6 +296,15 @@ def _set_run_dereverb(
         result["error"] = "could not map noreverb output"
         return result
     result["dry"] = str(dry)
+    if not reverb:
+        source_audio, sr = sf.read(str(source), always_2d=True, dtype="float32")
+        dry_audio, sr2 = sf.read(str(dry), always_2d=True, dtype="float32")
+        if int(sr) == int(sr2):
+            n = min(len(source_audio), len(dry_audio))
+            derived = root / "derived_reverb.wav"
+            sf.write(str(derived), (source_audio[:n] - dry_audio[:n]).astype(np.float32), sr, subtype="FLOAT")
+            reverb = derived
+            result["derived_reverb"] = True
     if reverb:
         result["reverb"] = str(reverb)
         result["pair_metrics"] = _pair_metrics(source, dry, reverb)
