@@ -24,7 +24,7 @@ RUN rm -rf /opt/unmixx /opt/medleyvox /models/medleyvox \
     && python /app/litelabs_parent_preset_analysis_patch.py \
     && python /app/litelabs_chunked_result_upload_patch.py \
     && python /app/litelabs_unmixx_multilead_patch.py \
-    && python -m py_compile /app/preset_pack.py /app/experimental_children_v1.py /app/multilead_research.py /app/litelabs_parent_preset_analysis_patch.py /app/litelabs_chunked_result_upload_patch.py /app/litelabs_unmixx_multilead_patch.py \
+    && python -m py_compile /app/preset_pack.py /app/experimental_children_v1.py /app/multilead_research.py /app/litelabs_parent_preset_analysis_patch.py /app/litelabs_chunked_result_upload_patch.py /app/litelabs_unmixx_multilead_patch.py /app/litelabs_anvuew_karaoke_patch.py \
     && python - <<'PY'
 from pathlib import Path
 
@@ -63,10 +63,17 @@ for required in (
 
 assert Path('/opt/unmixx/ckpt/best.ckpt').is_file()
 assert Path('/opt/unmixx/ckpt/conf.yml').is_file()
+assert Path('/models/audio_separator/bs_roformer_karaoke_anvuew.ckpt').is_file()
+assert Path('/models/audio_separator/bs_roformer_karaoke_anvuew.ckpt').stat().st_size > 0
+assert 'bs_roformer_karaoke_anvuew.ckpt' in experimental
+assert 'mel_band_roformer_karaoke_becruily.ckpt' not in experimental
+assert '"--use_autocast"' in experimental
+assert '"--use_torch_compile"' in experimental
+assert 'vocal_route_v3_anvuew_ac_compile' in experimental
 multi = Path('/app/multilead_research.py').read_text(encoding='utf-8')
 assert 'UNMIXX chunked' in multi
 assert 'MedleyVox' not in multi
 assert 'multi_lead_unmixx' in experimental
 
-print('LiteLABS production overlay verified: analysis + chunked upload + UNMIXX multi-lead enabled')
+print('LiteLABS production overlay verified: analysis + chunked upload + UNMIXX + Anvuew AC+C vocals enabled')
 PY
