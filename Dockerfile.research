@@ -28,12 +28,35 @@ assert md.version('setuptools') == '80.9.0'
 assert pkg_resources is not None
 PY
 
-# Keep only the lead/back candidates that remain in the focused shootout.
-RUN mkdir -p /models/audio_separator \
+# Lead/back research candidates. Anvuew AC+C is the incumbent; the two
+# next-generation challengers explicitly model lead/backing vocals.
+RUN mkdir -p /models/audio_separator /models/karaoke_nextgen \
     && audio-separator --model_file_dir /models/audio_separator \
         --model_filename bs_roformer_karaoke_anvuew.ckpt --download_model_only \
     && audio-separator --model_file_dir /models/audio_separator \
-        --model_filename mel_band_roformer_karaoke_becruily.ckpt --download_model_only
+        --model_filename mel_band_roformer_karaoke_becruily.ckpt --download_model_only \
+    && python - <<'PY'
+from pathlib import Path
+import requests
+
+assets = {
+    "mbr_bve_gonzaluigi.ckpt": "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/mel_band_roformer/mbr_bve_gonzaluigi.ckpt?download=true",
+    "mbr_bve_gonzaluigi_config.yaml": "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/mel_band_roformer/mbr_bve_gonzaluigi_config.yaml?download=true",
+    "bs_karaoke_3stem_giantailab.ckpt": "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/bs_roformer/bs_karaoke_3stem_giantailab.ckpt?download=true",
+    "bs_karaoke_3stem_giantailab_config.yaml": "https://huggingface.co/noblebarkrr/mvsepless_resources/resolve/main/bs_roformer/bs_karaoke_3stem_giantailab_config.yaml?download=true",
+}
+root = Path("/models/karaoke_nextgen")
+for name, url in assets.items():
+    dest = root / name
+    with requests.get(url, stream=True, timeout=(30, 1800)) as response:
+        response.raise_for_status()
+        with dest.open("wb") as handle:
+            for chunk in response.iter_content(4 * 1024 * 1024):
+                if chunk:
+                    handle.write(chunk)
+    assert dest.stat().st_size > 0, dest
+    print("downloaded", dest, dest.stat().st_size)
+PY
 
 # UNMIXX remains research-only. The focused benchmark now runs it in bounded
 # chunks with overlap so full-song VRAM use cannot scale with track duration.
@@ -74,6 +97,10 @@ assert 'drumsep_current' in benchmark
 for path in (
     '/models/audio_separator/bs_roformer_karaoke_anvuew.ckpt',
     '/models/audio_separator/mel_band_roformer_karaoke_becruily.ckpt',
+    '/models/karaoke_nextgen/mbr_bve_gonzaluigi.ckpt',
+    '/models/karaoke_nextgen/mbr_bve_gonzaluigi_config.yaml',
+    '/models/karaoke_nextgen/bs_karaoke_3stem_giantailab.ckpt',
+    '/models/karaoke_nextgen/bs_karaoke_3stem_giantailab_config.yaml',
     '/opt/unmixx/ckpt/best.ckpt',
 ):
     assert Path(path).is_file() and Path(path).stat().st_size > 0, path
