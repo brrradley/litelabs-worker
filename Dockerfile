@@ -15,7 +15,8 @@ COPY multilead_research.py /app/multilead_research.py
 COPY litelabs_unmixx_multilead_patch.py /app/litelabs_unmixx_multilead_patch.py
 COPY litelabs_anvuew_karaoke_patch.py /app/litelabs_anvuew_karaoke_patch.py
 
-RUN mkdir -p /models/audio_separator \
+RUN python -m pip install --no-cache-dir --upgrade "audio-separator==0.47.0" \
+    && mkdir -p /models/audio_separator \
     && audio-separator --model_file_dir /models/audio_separator --model_filename bs_roformer_karaoke_anvuew.ckpt --download_model_only \
     && rm -rf /opt/unmixx /opt/medleyvox /models/medleyvox \
     && git clone https://github.com/jihoojung0106/unmixx.git /opt/unmixx \
@@ -69,6 +70,8 @@ assert Path('/opt/unmixx/ckpt/best.ckpt').is_file()
 assert Path('/opt/unmixx/ckpt/conf.yml').is_file()
 assert Path('/models/audio_separator/bs_roformer_karaoke_anvuew.ckpt').is_file()
 assert Path('/models/audio_separator/bs_roformer_karaoke_anvuew.ckpt').stat().st_size > 0
+import importlib.metadata as md
+assert md.version('audio-separator') == '0.47.0'
 assert 'bs_roformer_karaoke_anvuew.ckpt' in experimental
 assert 'mel_band_roformer_karaoke_becruily.ckpt' not in experimental
 assert '"--use_autocast"' in experimental
