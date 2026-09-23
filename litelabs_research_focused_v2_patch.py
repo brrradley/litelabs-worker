@@ -261,17 +261,51 @@ def _focused_upload_archive(archive: Path, put_url: str, payload: dict) -> dict:
                         body = response.json()
                     except ValueError:
                         body = {}
-                    if body and not bool(body.get("ok", False)):
+
+                    # XenForo responses can be returned directly or wrapped by
+                    # the JSON reply layer. Normalize the common wrappers before
+                    # interpreting the receiver acknowledgement.
+                    ack = body
+                    for key in ("json", "data", "response"):
+                        if isinstance(ack, dict) and isinstance(ack.get(key), dict):
+                            ack = ack[key]
+                            break
+
+                    if isinstance(ack, dict) and ack and ack.get("ok") is False:
                         raise RuntimeError(
-                            str(body.get("error") or "Chunk receiver rejected research upload")
+                            str(ack.get("error") or "Chunk receiver rejected research upload")
                         )
-                    if part == total - 1 and body and not (
-                        bool(body.get("complete", False))
-                        or bool(body.get("already_complete", False))
-                    ):
-                        raise RuntimeError(
-                            "Chunk receiver did not confirm final research archive assembly"
+
+                    if part == total - 1:
+                        confirmed = isinstance(ack, dict) and (
+                            bool(ack.get("complete", False))
+                            or bool(ack.get("already_complete", False))
                         )
+
+                        # The public file itself is the authoritative completion
+                        # signal. This also handles XenForo response envelopes or
+                        # a lost final acknowledgement after successful assembly.
+                        if not confirmed:
+                            public_url = str(payload.get("result_public_url") or "").strip()
+                            if public_url:
+                                try:
+                                    check = requests.head(
+                                        public_url,
+                                        allow_redirects=True,
+                                        timeout=(15, 60),
+                                    )
+                                    content_length = int(check.headers.get("Content-Length") or 0)
+                                    confirmed = (
+                                        check.status_code < 400
+                                        and (content_length <= 0 or content_length == size)
+                                    )
+                                except Exception:
+                                    confirmed = False
+
+                        if not confirmed:
+                            raise RuntimeError(
+                                "Research archive was not confirmed as assembled after final chunk"
+                            )
                     print(
                         f"LiteLABS research upload chunk {part + 1}/{total} complete",
                         flush=True,
