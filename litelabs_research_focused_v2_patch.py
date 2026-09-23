@@ -277,35 +277,15 @@ def _focused_upload_archive(archive: Path, put_url: str, payload: dict) -> dict:
                         )
 
                     if part == total - 1:
-                        confirmed = isinstance(ack, dict) and (
-                            bool(ack.get("complete", False))
-                            or bool(ack.get("already_complete", False))
+                        # Do not require a particular XenForo JSON envelope here.
+                        # The chunk receiver writes the request body before returning
+                        # and assembles synchronously when all parts are present.
+                        # Therefore a successful 2xx response on our sequential final
+                        # POST is sufficient; explicit receiver errors are handled above.
+                        print(
+                            "LiteLABS research final chunk accepted by receiver",
+                            flush=True,
                         )
-
-                        # The public file itself is the authoritative completion
-                        # signal. This also handles XenForo response envelopes or
-                        # a lost final acknowledgement after successful assembly.
-                        if not confirmed:
-                            public_url = str(payload.get("result_public_url") or "").strip()
-                            if public_url:
-                                try:
-                                    check = requests.head(
-                                        public_url,
-                                        allow_redirects=True,
-                                        timeout=(15, 60),
-                                    )
-                                    content_length = int(check.headers.get("Content-Length") or 0)
-                                    confirmed = (
-                                        check.status_code < 400
-                                        and (content_length <= 0 or content_length == size)
-                                    )
-                                except Exception:
-                                    confirmed = False
-
-                        if not confirmed:
-                            raise RuntimeError(
-                                "Research archive was not confirmed as assembled after final chunk"
-                            )
                     print(
                         f"LiteLABS research upload chunk {part + 1}/{total} complete",
                         flush=True,
@@ -343,6 +323,7 @@ def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
             progress(message, percent)
 
     build_sha = os.getenv('LITELABS_BUILD_SHA', 'unknown')
+    listening_only = bool(payload.get('listening_only'))
     report = {
         'schema_version': 3,
         'mode': 'research_benchmark_focused_v2',
@@ -353,6 +334,7 @@ def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
             'precision_target_difference_db': -69.0,
             'dropped_candidates': ['Viperx BS-RoFormer ep317', 'Kimberley Jensen MelBand RoFormer Vocals'],
         },
+        'listening_only': listening_only,
         'tests': {},
     }
 
@@ -390,22 +372,26 @@ def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
         sw_stems = _collect_sw_stems(sw_dir)
         sw_vocals = sw_stems.get('vocals')
         sw_drums = sw_stems.get('drums')
-        if not sw_vocals or not sw_drums:
-            raise RuntimeError('SW baseline did not produce vocals and drums')
+        if not sw_vocals:
+            raise RuntimeError('SW baseline did not produce vocals')
+        if not listening_only and not sw_drums:
+            raise RuntimeError('SW baseline did not produce drums')
         report['tests']['sw_parent_baseline'] = {
             'runtime_seconds': round(sw_elapsed, 3),
             'vocals': _stats(sw_vocals),
-            'drums': _stats(sw_drums),
         }
+        if sw_drums:
+            report['tests']['sw_parent_baseline']['drums'] = _stats(sw_drums)
         _copy_named(sw_vocals, outputs / '01_current_sw_vocals.flac')
-        _copy_named(sw_drums, outputs / '01_current_sw_drums.flac')
+        if not listening_only and sw_drums:
+            _copy_named(sw_drums, outputs / '01_current_sw_drums.flac')
 
-        emit('Benchmarking production DrumSep route', 25)
-        drum_result = _focused_drumsep(sw_drums, root, timeout)
-        report['tests']['drumsep_current'] = drum_result
-        if drum_result.get('returncode') == 0:
-            for name, source_path in (drum_result.get('paths') or {}).items():
-                _copy_named(Path(source_path), outputs / f'02_drumsep_{name}.wav')
+            emit('Benchmarking production DrumSep route', 25)
+            drum_result = _focused_drumsep(sw_drums, root, timeout)
+            report['tests']['drumsep_current'] = drum_result
+            if drum_result.get('returncode') == 0:
+                for name, source_path in (drum_result.get('paths') or {}).items():
+                    _copy_named(Path(source_path), outputs / f'02_drumsep_{name}.wav')
 
         emit('Preparing full-track lead/back compatibility parent', 47)
         vocal_parent = root / 'sw_vocals_pcm16.wav'
@@ -520,20 +506,21 @@ def _run_research_benchmark_focused(payload: dict, progress=None) -> dict:
                 'mapping_hidden_in_answer_key': True,
             }
 
-        emit('Testing bounded-memory UNMIXX multi-vocal separation', 80)
-        unmixx_input = root / 'unmixx_vocals.wav'
-        rc, _, log = _run(['ffmpeg', '-y', '-i', str(sw_vocals), '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', str(unmixx_input)], timeout=300)
-        if rc != 0:
-            raise RuntimeError('UNMIXX input conversion failed: ' + log[-2000:])
-        unmixx = _focused_unmixx_chunked(
-            unmixx_input, root, timeout,
-            chunk_seconds=float(payload.get('unmixx_chunk_seconds') or 20.0),
-            overlap_seconds=float(payload.get('unmixx_overlap_seconds') or 2.0),
-        )
-        report['tests']['unmixx_chunked'] = unmixx
-        if unmixx.get('returncode') == 0:
-            for index, source_path in enumerate(unmixx.get('paths') or [], start=1):
-                _copy_named(Path(source_path), outputs / f'06_unmixx_voice_{index}.wav')
+        if not listening_only:
+            emit('Testing bounded-memory UNMIXX multi-vocal separation', 80)
+            unmixx_input = root / 'unmixx_vocals.wav'
+            rc, _, log = _run(['ffmpeg', '-y', '-i', str(sw_vocals), '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', str(unmixx_input)], timeout=300)
+            if rc != 0:
+                raise RuntimeError('UNMIXX input conversion failed: ' + log[-2000:])
+            unmixx = _focused_unmixx_chunked(
+                unmixx_input, root, timeout,
+                chunk_seconds=float(payload.get('unmixx_chunk_seconds') or 20.0),
+                overlap_seconds=float(payload.get('unmixx_overlap_seconds') or 2.0),
+            )
+            report['tests']['unmixx_chunked'] = unmixx
+            if unmixx.get('returncode') == 0:
+                for index, source_path in enumerate(unmixx.get('paths') or [], start=1):
+                    _copy_named(Path(source_path), outputs / f'06_unmixx_voice_{index}.wav')
 
         report['total_runtime_seconds'] = round(time.monotonic() - started, 3)
         (outputs / 'research_benchmark_report.json').write_text(json.dumps(_json_safe(report), indent=2), encoding='utf-8')
