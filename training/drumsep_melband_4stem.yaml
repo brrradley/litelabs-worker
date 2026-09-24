@@ -1,0 +1,102 @@
+audio:
+  chunk_size: 352800
+  dim_f: 1024
+  dim_t: 256
+  hop_length: 441
+  n_fft: 2048
+  num_channels: 2
+  sample_rate: 44100
+  min_mean_abs: 0.0
+
+model:
+  dim: 384
+  depth: 6
+  stereo: true
+  num_stems: 4
+  time_transformer_depth: 1
+  freq_transformer_depth: 1
+  linear_transformer_depth: 0
+  num_bands: 60
+  dim_head: 64
+  heads: 8
+  attn_dropout: 0
+  ff_dropout: 0
+  flash_attn: true
+  dim_freqs_in: 1025
+  sample_rate: 44100
+  stft_n_fft: 2048
+  stft_hop_length: 441
+  stft_win_length: 2048
+  stft_normalized: false
+  mask_estimator_depth: 2
+  multi_stft_resolution_loss_weight: 1.0
+  multi_stft_resolutions_window_sizes: !!python/tuple
+    - 4096
+    - 2048
+    - 1024
+    - 512
+    - 256
+  multi_stft_hop_size: 147
+  multi_stft_normalized: false
+  mlp_expansion_factor: 4
+  use_torch_checkpoint: true
+  skip_connection: false
+
+training:
+  batch_size: 1
+  gradient_accumulation_steps: 4
+  grad_clip: 0
+  instruments:
+    - kick
+    - snare
+    - toms
+    - cymbals
+  lr: 1.0e-05
+  patience: 3
+  reduce_factor: 0.95
+  target_instrument: null
+  num_epochs: 1000
+  num_steps: 1000
+  q: 0.95
+  coarse_loss_clip: false
+  ema_momentum: 0.999
+  optimizer: adam
+  other_fix: false
+  use_amp: true
+
+augmentations:
+  enable: true
+  loudness: true
+  loudness_min: 0.6
+  loudness_max: 1.4
+  mixup: true
+  mixup_probs: !!python/tuple
+    - 0.20
+    - 0.02
+  mixup_loudness_min: 0.6
+  mixup_loudness_max: 1.4
+  all:
+    channel_shuffle: 0.5
+    random_inverse: 0.05
+    random_polarity: 0.5
+  kick:
+    pitch_shift: 0.10
+    pitch_shift_min_semitones: -2
+    pitch_shift_max_semitones: 2
+  snare:
+    pitch_shift: 0.10
+    pitch_shift_min_semitones: -2
+    pitch_shift_max_semitones: 2
+  toms:
+    pitch_shift: 0.15
+    pitch_shift_min_semitones: -3
+    pitch_shift_max_semitones: 3
+  cymbals:
+    pitch_shift: 0.05
+    pitch_shift_min_semitones: -2
+    pitch_shift_max_semitones: 2
+
+inference:
+  batch_size: 1
+  dim_t: 256
+  num_overlap: 4
