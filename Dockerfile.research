@@ -48,6 +48,7 @@ COPY research_benchmark_v2.py /app/research_benchmark_v2.py
 COPY litelabs_research_benchmark_handler_patch.py /app/litelabs_research_benchmark_handler_patch.py
 COPY litelabs_research_focused_v2_patch.py /app/litelabs_research_focused_v2_patch.py
 COPY litelabs_set_targeted_research_patch.py /app/litelabs_set_targeted_research_patch.py
+COPY training/ /app/training/
 
 RUN python /app/litelabs_research_benchmark_handler_patch.py \
     && python /app/litelabs_research_focused_v2_patch.py \
