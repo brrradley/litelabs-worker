@@ -14,7 +14,7 @@ from sw_residual_allocator import STEMS as SW_STEMS, _download, _resolve_model_f
 from wind_brass_decomposition_v2 import _run_polled
 
 PRESETS = {
-    "basic": ("instrumental", "vocals"),
+    "basic": ("instrumental", "vocals", "percussion"),
     "core": ("vocals", "percussion", "bass", "strings", "keys", "other"),
     "experimental": (
         "lead_vocals", "backing_vocals", "kick", "snare", "toms", "hi_hats",
@@ -260,6 +260,10 @@ def build_parent_preset(payload: dict, progress=None) -> dict:
             vocals_dest = final / f"{track}_vocals.flac"
             _copy_as_flac(stems["vocals"], vocals_dest)
             exported.append(vocals_dest.name)
+
+            percussion_dest = final / f"{track}_percussion.flac"
+            _copy_as_flac(stems["drums"], percussion_dest)
+            exported.append(percussion_dest.name)
 
             mixture, mix_sr = _read(source)
             vocals, _ = _read(stems["vocals"])
