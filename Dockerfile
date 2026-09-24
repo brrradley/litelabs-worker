@@ -35,6 +35,14 @@ from pathlib import Path
 
 preset = Path('/app/preset_pack.py').read_text(encoding='utf-8')
 experimental = Path('/app/experimental_children_v1.py').read_text(encoding='utf-8')
+
+# Basic must advertise and actually export percussion alongside vocals and
+# instrumental. Keep Core percussion unchanged until the dedicated DrumSep
+# replacement is promoted.
+assert '"basic": ("instrumental", "vocals", "percussion")' in preset
+assert 'percussion_dest = final / f"{track}_percussion.flac"' in preset
+assert '_copy_as_flac(stems["drums"], percussion_dest)' in preset
+assert '"core": ("vocals", "percussion", "bass", "strings", "keys", "other")' in preset
 for marker in (
     'parent_analysis_v3',
     '/app/genre_probe.py',
